@@ -5,7 +5,7 @@
 import { hasRoom } from "./disk.js";
 import { BodyIdleError, BodyStreamError } from "./files.js";
 import { errorResponse, json } from "./http.js";
-import { IDLE_BODY_SECONDS, MAX_BLOB_BYTES } from "./limits.js";
+import { IDLE_BODY_SECONDS, MAX_BLOB_BYTES, MAX_BLOB_UPLOADS_PER_VAULT } from "./limits.js";
 import type { RouteDeps } from "./sync-api.js";
 
 /** An error answer of a blob route: the usual JSON body plus the code in a header, so a client
@@ -14,6 +14,31 @@ export function blobError(status: number, code: string): Response {
   const res = errorResponse(status, code);
   res.headers.set("moony-error", code);
   return res;
+}
+
+/** Counts the blob uploads of each vault that are in flight. */
+export interface UploadGate {
+  /** A release function, or null when the vault already has its share running. */
+  tryEnter(vaultId: string): (() => void) | null;
+}
+
+export function createUploadGate(perVault: number = MAX_BLOB_UPLOADS_PER_VAULT): UploadGate {
+  const running = new Map<string, number>();
+  return {
+    tryEnter(vaultId) {
+      const n = running.get(vaultId) ?? 0;
+      if (n >= perVault) return null;
+      running.set(vaultId, n + 1);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const left = (running.get(vaultId) ?? 1) - 1;
+        if (left <= 0) running.delete(vaultId);
+        else running.set(vaultId, left);
+      };
+    },
+  };
 }
 
 export async function blobRoute(
@@ -35,33 +60,22 @@ export async function blobRoute(
     if (!known.ok) return blobError(known.status, known.error);
     if (known.exists) return created(false, 200);
 
-    const length = Number(request.headers.get("content-length") ?? "NaN");
-    if (!Number.isInteger(length) || length <= 0) return blobError(411, "length_required");
+    // Digits only: Number() would also take "1e3" or "0x10".
+    const declared = request.headers.get("content-length") ?? "";
+    const length = /^[0-9]+$/.test(declared) ? Number(declared) : NaN;
+    if (!Number.isSafeInteger(length) || length <= 0) return blobError(411, "length_required");
     if (length > MAX_BLOB_BYTES) return blobError(413, "blob_too_large");
+    if (!blobs.fits(vaultId, length)) return blobError(413, "quota_exceeded");
     if (!request.body) return blobError(400, "empty_body");
 
     if (!hasRoom(await rd.freeBytes(), length)) return blobError(507, "server_full");
 
-    let written;
+    const release = rd.uploads.tryEnter(vaultId);
+    if (!release) return blobError(429, "too_many_uploads");
     try {
-      // The declared length is also the cap: a body that runs past it is refused as it streams.
-      written = await files.writeTemp(vaultId, blobId, request.body, length, IDLE_BODY_SECONDS * 1000);
-    } catch (e) {
-      if (e instanceof BodyStreamError) return blobError(400, "incomplete_body");
-      if (e instanceof BodyIdleError) return blobError(408, "body_timeout");
-      // The vault was deleted while the body was streaming: its directory is gone.
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return blobError(404, "vault_not_found");
-      throw e; // disk errors: 500 internal_error via the app's error handler
-    }
-    if (written === "too_large") return blobError(413, "blob_too_large");
-    const { tmp, size } = written;
-    try {
-      if (size !== length) return blobError(400, "incomplete_body");
-      const r = blobs.commit(vaultId, token, blobId, size, () => files.publish(vaultId, blobId, tmp));
-      if (!r.ok) return blobError(r.status, r.error);
-      return r.created ? created(true, 201) : created(false, 200);
+      return await receive(rd, request, vaultId, blobId, token, length);
     } finally {
-      files.discard(vaultId, tmp); // a no-op after a publish
+      release();
     }
   }
 
@@ -83,6 +97,39 @@ export async function blobRoute(
   }
 
   return blobError(405, "method_not_allowed");
+}
+
+/** Steps 6-7 of an upload: stream the body to a temporary file, then commit it. */
+async function receive(
+  rd: RouteDeps,
+  request: Request,
+  vaultId: string,
+  blobId: string,
+  token: string,
+  length: number,
+): Promise<Response> {
+  const { blobs, blobFiles: files } = rd.stores;
+  let written;
+  try {
+    // The declared length is also the cap: a body that runs past it is refused as it streams.
+    written = await files.writeTemp(vaultId, blobId, request.body!, length, IDLE_BODY_SECONDS * 1000);
+  } catch (e) {
+    if (e instanceof BodyStreamError) return blobError(400, "incomplete_body");
+    if (e instanceof BodyIdleError) return blobError(408, "body_timeout");
+    // The vault was deleted while the body was streaming: its directory is gone.
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return blobError(404, "vault_not_found");
+    throw e; // disk errors: 500 internal_error via the app's error handler
+  }
+  if (written === "too_large") return blobError(413, "blob_too_large");
+  const { tmp, size } = written;
+  try {
+    if (size !== length) return blobError(400, "incomplete_body");
+    const r = blobs.commit(vaultId, token, blobId, size, () => files.publish(vaultId, blobId, tmp));
+    if (!r.ok) return blobError(r.status, r.error);
+    return r.created ? created(true, 201) : created(false, 200);
+  } finally {
+    files.discard(vaultId, tmp); // a no-op after a publish
+  }
 }
 
 const created = (value: boolean, status: number): Response => json({ created: value }, status);

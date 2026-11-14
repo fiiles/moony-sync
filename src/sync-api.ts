@@ -2,7 +2,7 @@
 
 import { Hono, type Context } from "hono";
 import type { AppBindings, AppDeps, Stores } from "./app.js";
-import { blobError, blobRoute } from "./blob-api.js";
+import { blobError, blobRoute, createUploadGate, type UploadGate } from "./blob-api.js";
 import { hasRoom, type FreeBytes } from "./disk.js";
 import {
   base64DecodedLength,
@@ -36,7 +36,7 @@ type Env = { Bindings: AppBindings };
 
 export function syncRoutes(deps: AppDeps, stores: Stores, limiters: Limiters, budget: BodyBudget): Hono<Env> {
   const r = new Hono<Env>();
-  const rd: RouteDeps = { stores, limiters, budget, freeBytes: deps.freeBytes };
+  const rd: RouteDeps = { stores, limiters, budget, freeBytes: deps.freeBytes, uploads: createUploadGate() };
   const callerOf = (c: Context<Env>): string =>
     clientKey(c.req.raw, c.env.clientAddress, deps.config.trustProxy);
 
@@ -116,6 +116,7 @@ export interface RouteDeps {
   limiters: Limiters;
   budget: BodyBudget;
   freeBytes: FreeBytes;
+  uploads: UploadGate;
 }
 
 async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Promise<Response> {

@@ -255,7 +255,9 @@ address.
 - **Quota and parallel uploads.** A person's op quota is 256 MiB, counted as the ciphertext plus
   128 bytes per change (so many tiny changes cannot use up the disk unnoticed); real disk use is
   still higher because of row and index overhead beyond the 128 bytes charged: for very small changes the real disk cost can be up to about twice the quota. Snapshot uploads
-  (100 MiB each, 2 kept per profile) are not limited in parallel.
+  (100 MiB each, 2 kept per profile) are not limited in parallel, but a profile may upload at
+  most two documents or photos at once (the nginx `client_max_body_size 128m` advice already
+  covers a 100 MiB document).
 
 ## Development
 

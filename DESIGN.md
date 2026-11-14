@@ -305,14 +305,14 @@ written once.
 
 | Method | Path | Notes |
 |---|---|---|
-| `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
+| `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes, `413 quota_exceeded` when the vault's blobs plus this one would pass its quota, `429 too_many_uploads` when two uploads of the vault are already running). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
 | `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current or previous token, also in the read grace. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
 | `GET` | `/v1/vaults/:vaultId/blobs/:blobId` | The same access as `HEAD`. Raw bytes, `Content-Length`, `Moony-Blob-Size`; `404 blob_not_found` (also for a record whose file is gone). |
 
 Order of checks for `PUT`: token and entitlement come first, before a single body byte is read;
-an existing blob answers `200` without the body; then the length, the free space, and only then
-the body, which streams to a temporary file that is fsynced and renamed into place in the same
-transaction that inserts the record. The token is checked again at that moment, so a vault
+an existing blob answers `200` without the body; then the length, the quota, the free space, the
+two-uploads-per-vault slot, and only then the body, which streams to a temporary file that is fsynced and renamed into place in the same
+transaction that inserts the record. The token and the quota are checked again at that moment, so a vault
 deleted or a token rotated while the body streamed leaves no file and no record.
 
 ### Pairing mailbox
@@ -406,6 +406,9 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Pull page | default 500 ops, max 1000, cut at ~4 MiB |
 | Op bytes stored per vault | 256 MiB, each op charged ciphertext + 128 bytes |
 | Snapshot | 100 MiB, 2 kept per vault |
+| Blob | 104,883,275 bytes (100 MiB of content sealed by the app) |
+| Blob bytes per vault | 10 GiB by default, one setting for the whole server (admin Settings) |
+| Blob uploads per vault at once | 2, then `429 too_many_uploads` |
 | Free space kept on the data volume | 1 GiB; uploads that would go below it answer `507 server_full` |
 | Rekey bundle | 256 KiB decoded, 32 kept per vault |
 | Previous token (read-only) and rekey bundle | 30 days after the rotation |
