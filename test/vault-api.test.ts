@@ -1,7 +1,7 @@
 // Vault creation, ops, entitlement and snapshots.
 
 import { describe, expect, it } from "vitest";
-import { DAY, MAX_OP_BYTES, MAX_OPS_PER_PUSH, MAX_VAULT_OP_BYTES } from "../src/limits.js";
+import { DAY, MAX_OP_BYTES, MAX_OPS_PER_PUSH, MAX_VAULT_OP_BYTES, OP_OVERHEAD_BYTES } from "../src/limits.js";
 import {
   addPerson,
   auth,
@@ -169,6 +169,22 @@ describe("ops", () => {
     const res = await push(t, v, [{ id: "q", ct: b64("123456") }]);
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({ error: "quota_exceeded" });
+  });
+});
+
+describe("op quota charge", () => {
+  it("charges each op its ciphertext plus 128 bytes, in the quota and in the reported bytes", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const info = async () => (await (await t.call("GET", `/v1/vaults/${v.id}`, { headers: auth(v) })).json()) as { bytes: number };
+    expect((await push(t, v, [{ id: "a", ct: b64("abc") }, { id: "b", ct: b64("de") }])).status).toBe(200);
+    expect((await info()).bytes).toBe(3 + 2 + 2 * OP_OVERHEAD_BYTES);
+    // A tiny op that fits only without the overhead is refused; one that fits with it is accepted.
+    t.db.prepare("UPDATE vaults SET bytes = ? WHERE vault_id = ?").run(MAX_VAULT_OP_BYTES - 3 - OP_OVERHEAD_BYTES + 1, v.id);
+    expect((await push(t, v, [{ id: "c", ct: b64("xyz") }])).status).toBe(413);
+    t.db.prepare("UPDATE vaults SET bytes = ? WHERE vault_id = ?").run(MAX_VAULT_OP_BYTES - 3 - OP_OVERHEAD_BYTES, v.id);
+    expect((await push(t, v, [{ id: "c", ct: b64("xyz") }])).status).toBe(200);
+    expect((await info()).bytes).toBe(MAX_VAULT_OP_BYTES);
   });
 });
 

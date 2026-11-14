@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { OP_OVERHEAD_BYTES } from "../src/limits.js";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decodeConnectionCode } from "../src/connection-code.js";
@@ -140,12 +141,12 @@ describe("people", () => {
     const list = await json(await s.call("GET", "people"));
     expect(list.map((p: any) => p.name)).toEqual(["Anna", "Bob"]);
     expect(list[0]).toEqual({
-      id: a.person.id, name: "Anna", state: "active", profiles: 2, bytes: 5 + 7,
+      id: a.person.id, name: "Anna", state: "active", profiles: 2, bytes: 5 + OP_OVERHEAD_BYTES + 7,
       lastActivity: Math.floor(t.clock.now / 60) * 60, createdAt: anna.createdAt,
     });
     expect(list[1]).toMatchObject({ id: b.person.id, profiles: 0, bytes: 0, lastActivity: null });
     const o = await json(await s.call("GET", "overview"));
-    expect(o).toMatchObject({ people: 2, profiles: 2, bytesUsed: 12, lastActivity: list[0].lastActivity });
+    expect(o).toMatchObject({ people: 2, profiles: 2, bytesUsed: 12 + OP_OVERHEAD_BYTES, lastActivity: list[0].lastActivity });
     const empty = await ready();
     expect(await json(await empty.s.call("GET", "overview"))).toMatchObject({ people: 0, profiles: 0, bytesUsed: 0, lastActivity: null });
   });
@@ -157,8 +158,8 @@ describe("people", () => {
     const v = await newVault(t, t.stores.people.get(a.person.id)!.account);
     await push(t, v, [{ id: "a", ct: btoa("123") }]);
     const r = await json(await s.call("GET", `people/${a.person.id}`));
-    expect(r).toMatchObject({ id: a.person.id, name: "Anna", profiles: 1, bytes: 3 });
-    expect(r.vaults).toEqual([{ id: v.id, shortId: v.id.slice(0, 6), bytes: 3, lastActivity: expect.any(Number) }]);
+    expect(r).toMatchObject({ id: a.person.id, name: "Anna", profiles: 1, bytes: 3 + OP_OVERHEAD_BYTES });
+    expect(r.vaults).toEqual([{ id: v.id, shortId: v.id.slice(0, 6), bytes: 3 + OP_OVERHEAD_BYTES, lastActivity: expect.any(Number) }]);
     const none = await s.call("GET", "people/nope");
     expect([none.status, await json(none)]).toEqual([404, { error: "person_not_found" }]);
   });

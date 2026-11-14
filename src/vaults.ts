@@ -12,6 +12,7 @@ import { encodeBase64, timingSafeEqualStr } from "./encoding.js";
 import { fail, type Result } from "./http.js";
 import {
   MAX_PULL_BYTES,
+  OP_OVERHEAD_BYTES,
   MAX_REKEYS_KEPT,
   MAX_REKEY_BYTES,
   MAX_REKEY_PAGE_BYTES,
@@ -298,17 +299,20 @@ export function createVaults(
     const auth = authorize(vaultId, token, "write");
     if (!auth.ok) return auth;
     const m = auth.meta;
-    const incoming = ops.reduce((n, op) => n + op.ct.byteLength, 0);
+    // Each op is charged its ciphertext plus a fixed overhead (row, index and op ID), so tiny
+    // ops cannot grow the real disk use far beyond the quota. `size` and `bytes` hold the charge.
+    const incoming = ops.reduce((n, op) => n + op.ct.byteLength + OP_OVERHEAD_BYTES, 0);
     if (m.bytes + incoming > MAX_VAULT_OP_BYTES) return fail(413, "quota_exceeded");
     const now = clock();
     let head = m.head;
     let bytes = m.bytes;
     let accepted = 0;
     for (const op of ops) {
-      const r = q.insertOp.run(vaultId, head + 1, op.id, asBuffer(op.ct), op.ct.byteLength, now);
+      const charge = op.ct.byteLength + OP_OVERHEAD_BYTES;
+      const r = q.insertOp.run(vaultId, head + 1, op.id, asBuffer(op.ct), charge, now);
       if (r.changes > 0) {
         head += 1;
-        bytes += op.ct.byteLength;
+        bytes += charge;
         accepted += 1;
       }
     }

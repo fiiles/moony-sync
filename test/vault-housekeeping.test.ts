@@ -3,7 +3,7 @@
 import { mkdirSync, utimesSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { DAY, ORPHAN_SNAPSHOT_AGE_SECONDS } from "../src/limits.js";
+import { DAY, OP_OVERHEAD_BYTES, ORPHAN_SNAPSHOT_AGE_SECONDS } from "../src/limits.js";
 import { createSnapshots, type Snapshots } from "../src/snapshots.js";
 import { createVaults } from "../src/vaults.js";
 import {
@@ -69,7 +69,7 @@ describe("housekeeping", () => {
       await t.call("GET", `/v1/vaults/${v.id}`, { headers: auth(v) })
     ).json()) as { floor: number; head: number; snapshotSeq: number; bytes: number };
     expect(info).toMatchObject({ floor: 3, head: 5, snapshotSeq: 3 });
-    expect(info.bytes).toBe(new TextEncoder().encode("o-cipher-3n-cipher-0").byteLength);
+    expect(info.bytes).toBe(new TextEncoder().encode("o-cipher-3n-cipher-0").byteLength + 2 * OP_OVERHEAD_BYTES);
   });
 
   it("keeps recent ops even when a snapshot covers them", async () => {
@@ -319,7 +319,7 @@ describe("last activity", () => {
     await pull(t, v);
     expect(list()[0]!.lastActivity).toBe(minute(t.clock.now));
     await push(t, v, ops("l", 2));
-    expect(list()[0]!.bytes).toBe(2 * "l-cipher-0".length);
+    expect(list()[0]!.bytes).toBe(2 * ("l-cipher-0".length + OP_OVERHEAD_BYTES));
   });
 });
 
