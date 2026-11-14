@@ -280,7 +280,7 @@ Headers: `Moony-Account: <account number>` for account calls and vault creation;
 |---|---|---|
 | `PUT` | `/v1/vaults/:vaultId` | Create (idempotent for the same account + token). Needs `Moony-Account` + `Authorization`; the person must be entitled (`402 payment_required` when blocked), at most 5 vaults (`403 vault_limit_reached`). → `201` / `200`. `409 vault_exists` for another account or token, `409 vault_deleting` while a deletion is unfinished. |
 | `GET` | `/v1/vaults/:vaultId` | → `{"head", "floor", "snapshotSeq", "paidUntil", "bytes", "rotation"}`. `rotation` is the latest rotation number (0 = never rotated); a device that sees it rise fetches the rekey bundles. |
-| `POST` | `/v1/vaults/:vaultId/ops` | Push. Body `{"ops": [{"id": "<op id>", "ct": "<base64>"}]}` → `{"head": n, "accepted": k}`. Duplicate op IDs are ignored (safe retries) while the op is still stored; after pruning the server no longer knows the ID, so clients must treat re-applying an op as harmless (per-column LWW already is). `413 quota_exceeded` past 256 MiB of op bytes. |
+| `POST` | `/v1/vaults/:vaultId/ops` | Push. Body `{"ops": [{"id": "<op id>", "ct": "<base64>"}]}` → `{"head": n, "accepted": k}`. Duplicate op IDs are ignored (safe retries) while the op is still stored; after pruning the server no longer knows the ID, so clients must treat re-applying an op as harmless (per-column LWW already is). `413 quota_exceeded` past 256 MiB of op bytes, where each stored op is charged its ciphertext plus 128 bytes (the vault info `bytes` and the admin's space figures are this charge). |
 | `GET` | `/v1/vaults/:vaultId/ops?after=<seq>&limit=<n>` | Pull. → `{"ops": [{"seq", "id", "ct"}], "head", "more"}`. `410 snapshot_required` when `after < floor`. |
 | `PUT` | `/v1/vaults/:vaultId/snapshot?seq=<S>` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 snapshot_too_large` over 100 MiB). `S` = the op seq the snapshot includes (`400 snapshot_ahead_of_head`, `409 snapshot_outdated`). The body streams to disk; a body that ends early is `400 incomplete_body`. |
 | `GET` | `/v1/vaults/:vaultId/snapshot` | Raw bytes; `Moony-Snapshot-Seq` header. `404 no_snapshot` when none. |
@@ -314,7 +314,11 @@ erased by a sweep that runs every 60 seconds, so they exist at most about 11 min
 expiry plus the sweep); after that only the tombstone remains.
 
 All open slots together may hold 64 MiB; a `PUT` that would pass that answers `503 busy` and
-stores nothing.
+stores nothing. One client key (IPv4 address, or IPv6 /64) may hold at most 8 MiB in open
+slots; beyond that its `PUT` answers `503 busy`, others are unaffected. The writer's key is stored
+with the slot only as a SHA-256 (never the address) and is cleared when the slot is read or burnt.
+The totals are kept in memory, updated by every put, read, burn and expiry, and recomputed from
+the table at start and in each minute sweep.
 
 ## Sync flow (client view)
 
@@ -337,9 +341,11 @@ IPv4-mapped IPv6 address, and by its /64 prefix for any other IPv6 address. Requ
 read with a running byte count, so a missing or lying `Content-Length` cannot make the server
 buffer more than the limit; snapshot uploads stream to disk. A push or token rotation is judged
 by its token (unknown vault, wrong or read-only token, blocked person) **before** its body is
-read. All bodies being buffered at once, on the sync and the admin API together, share 64 MiB
-(each reserves its declared length, at most its route's limit); a request that does not fit
-answers `503 busy` without being read. Snapshot uploads are not counted.
+read. All bodies being buffered at once, on the sync and the admin API together, share 64 MiB.
+A body reserves bytes as they arrive (never what it declares), so an idle connection holds
+nothing; a chunk that does not fit answers `503 busy`. A body that delivers no bytes for 30
+seconds is aborted with `408 {"error":"body_timeout"}`. Snapshot uploads stream to disk and are
+exempt from both.
 
 ## Housekeeping
 
@@ -370,7 +376,7 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Ops per push | 500 |
 | Push body | 4 MiB |
 | Pull page | default 500 ops, max 1000, cut at ~4 MiB |
-| Op bytes stored per vault | 256 MiB |
+| Op bytes stored per vault | 256 MiB, each op charged ciphertext + 128 bytes |
 | Snapshot | 100 MiB, 2 kept per vault |
 | Rekey bundle | 256 KiB decoded, 32 kept per vault |
 | Previous token (read-only) and rekey bundle | 30 days after the rotation |
@@ -379,7 +385,8 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Pairing slot | 1 byte – 64 KiB, write-once, read-once |
 | Pairing mailbox lifetime | 10 minutes (ID burnt 24 h more); contents swept within a minute after |
 | Bytes in open pairing slots, all mailboxes | 64 MiB, then `503 busy` |
-| Request bodies buffered at once (sync + admin) | 64 MiB, then `503 busy` |
+| Request bodies buffered at once (sync + admin) | 64 MiB of arrived bytes, then `503 busy`; idle 30 s → `408 body_timeout` |
+| Open pairing slots per client key | 8 MiB, then `503 busy` |
 | Admin session | 12 hours without use |
 | Admin request body | 16 KiB |
 

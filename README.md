@@ -230,25 +230,29 @@ each request, so a stopped server misses nothing. Details in [`DESIGN.md`](DESIG
 
 The log (stdout) contains the start-up line, the setup code while there is no admin,
 `housekeeping: <step> failed`, `unhandled error: <error name>` (the name only) and
-`shutdown: WAL checkpoint failed`. A start that is refused (a bad setting, or a database from a
+`shutdown: WAL checkpoint failed`. The HTTP layer may also print a stack trace when a file stream
+fails; it contains no paths or IDs. A start that is refused (a bad setting, or a database from a
 newer server) prints one line to stderr and exits with status 1. The log never contains account
 numbers, tokens, profile or mailbox IDs, file paths or client addresses.
 
 Pairing mailboxes hold their contents for at most about 11 minutes (10-minute expiry plus a sweep
 that runs every minute); after that only a content-free tombstone remains. Limits that answer
-`503 {"error":"busy"}`: all open pairing slots together hold at most 64 MiB, and request bodies
-being buffered at one moment (sync and admin API together; snapshot uploads stream to disk and do
-not count) share 64 MiB. With `TRUST_PROXY=1` the **last** `X-Forwarded-For` entry is the client
+`503 {"error":"busy"}`: all open pairing slots together hold at most 64 MiB (one client address, or IPv6 /64, at most
+8 MiB of that), and request bodies being buffered at one moment (sync and admin API together;
+snapshot uploads stream to disk and do not count) share 64 MiB, reserved as the bytes arrive. A
+body that delivers nothing for 30 seconds is aborted with `408 {"error":"body_timeout"}`. With `TRUST_PROXY=1` the **last** `X-Forwarded-For` entry is the client
 address.
 
 ## Known limits
 
 - **No Host allowlist.** A web page that rebinds its DNS name to your server's LAN address can
-  reach the server's unauthenticated routes through a visitor's browser (setup needs the setup
-  code, login is attempt-limited, everything else needs a token). Do not expose a server to
-  the internet without the https proxy, and keep the admin page's address out of untrusted pages.
-- **Disk use can exceed the quota.** A person's 256 MiB op quota counts ciphertext bytes, not
-  the row overhead in the database, so real disk use can be somewhat higher. Snapshot uploads
+  reach the **unauthenticated** routes of a LAN-only server through a visitor's browser. Neither
+  https nor keeping the address secret prevents that. What protects the server is that setup
+  needs the code from the log, login is attempt-limited, and everything else needs a session or
+  a vault token.
+- **Quota and parallel uploads.** A person's op quota is 256 MiB, counted as the ciphertext plus
+  128 bytes per change (so many tiny changes cannot use up the disk unnoticed); real disk use is
+  still somewhat higher because of database indexes and the write-ahead log. Snapshot uploads
   (100 MiB each, 2 kept per profile) are not limited in parallel.
 
 ## Development
