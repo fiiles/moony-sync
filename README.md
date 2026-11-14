@@ -4,7 +4,7 @@ A small server you run yourself, so your Moony devices can keep their data in sy
 cloud service in between. It stores and forwards **encrypted** change records, encrypted
 snapshots, and the apps' encrypted documents and photos. It cannot read them: the keys never leave your devices.
 
-- One Node process, one folder of data (a SQLite database and snapshot files).
+- One Node process, one folder of data (a SQLite database, snapshot files and the files of documents and photos).
 - A web page to add the people who may use it, block them, delete them and download a backup.
 - No outbound connections. No e-mail, no analytics, no telemetry.
 - Written for a home server or a NAS: a Docker container, `compose.yml`, and a few lines of reverse
@@ -220,7 +220,7 @@ All optional. Everything else is set on the admin page and stored in the databas
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `8787` | Listening port |
-| `DATA_DIR` | `/data` (in the image) | Database and snapshots |
+| `DATA_DIR` | `/data` (in the image) | Database, snapshots and blobs |
 | `PUBLIC_URL` | unset | The address apps use, for connection codes. The address saved on the admin's Settings page wins over it. |
 | `TRUST_PROXY` | `0` | `1` behind one reverse proxy, see above. Accepts `1`, `0`, `true`, `false` in any case; anything else stops the server at start. |
 | `REQUIRE_2FA` | `0` | `1` makes the admin's second factor mandatory: enrolment is forced after login and cannot be turned off. Same accepted values. |
@@ -233,7 +233,7 @@ In `DATA_DIR`: `moony-sync.db` (SQLite, WAL mode, with `-wal` and `-shm` files n
 apps; the server keeps the newest two snapshots per profile. Housekeeping runs once a day inside
 the server (it also cleans up abandoned document uploads), and every time rule is also checked on each request, so a stopped server misses
 nothing. Uploads stop with "server full" (`507`) when less than 1 GiB would remain free on the
-data volume, and ordinary sync goes on. Details in [`DESIGN.md`](DESIGN.md).
+data volume (uploads still running count as used), and ordinary sync goes on. Details in [`DESIGN.md`](DESIGN.md).
 
 The log (stdout) contains the start-up line, the setup code while there is no admin,
 `housekeeping: <step> failed`, `unhandled error: <error name>` (the name only) and

@@ -1,6 +1,6 @@
 // Blob quota and the two-upload limit.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createUploadGate } from "../src/blob-api.js";
 import { blobQuotaBytes, setBlobQuotaBytes } from "../src/blobs.js";
 import {
@@ -44,6 +44,14 @@ describe("quota", () => {
     expect(res.headers.get("moony-error")).toBe("quota_exceeded");
     expect(c.state.pulled).toBeLessThanOrEqual(1);
     expect((await uploadBlob(t, v, newBlobId(), bytes(400))).status).toBe(201);
+  });
+
+  it("an empty body to a vault over quota is 400 empty_body, not 413", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    setBlobQuotaBytes(t.db, 10);
+    const res = await t.call("PUT", blobUrl(v, newBlobId()), { headers: auth(v, { "content-length": "100" }) });
+    expect([res.status, await res.json()]).toEqual([400, { error: "empty_body" }]);
   });
 
   it("the commit re-checks: two uploads that each fit alone end as one 201 and one 413", async () => {
@@ -97,8 +105,7 @@ describe("two uploads per vault", () => {
     const other = await newVault(t);
     const a = heldBlobUpload(t, v, newBlobId(), "aaaaaaaaaa");
     const b = heldBlobUpload(t, v, newBlobId(), "bbbbbbbbbb");
-    await a.started();
-    await new Promise((r) => setTimeout(r, 50));
+    await b.started(2);
     const c = putCounting(t, v, newBlobId(), 7, 7 * 65536);
     const res = await c.response;
     expect([res.status, await res.json()]).toEqual([429, { error: "too_many_uploads" }]);
@@ -117,13 +124,52 @@ describe("two uploads per vault", () => {
     const v = await newVault(t);
     const a = heldBlobUpload(t, v, newBlobId(), "aaaaaaaaaa");
     const b = heldBlobUpload(t, v, newBlobId(), "bbbbbbbbbb");
-    await a.started();
-    await new Promise((r) => setTimeout(r, 50));
+    await b.started(2);
     a.fail();
     b.fail();
     expect([(await a.response).status, (await b.response).status]).toEqual([400, 400]);
     expect((await uploadBlob(t, v, newBlobId(), "x")).status).toBe(201);
     expect((await uploadBlob(t, v, newBlobId(), "y")).status).toBe(201);
+  });
+
+  it("an upload that ends with 408 body_timeout gives its slot back", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    vi.useFakeTimers();
+    try {
+      const a = heldBlobUpload(t, v, newBlobId(), "aaaaaaaaaa");
+      const b = heldBlobUpload(t, v, newBlobId(), "bbbbbbbbbb");
+      await b.started(2);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect([(await a.response).status, (await b.response).status]).toEqual([408, 408]);
+    } finally {
+      vi.useRealTimers();
+    }
+    const c = heldBlobUpload(t, v, newBlobId(), "cccccccccc");
+    const d = heldBlobUpload(t, v, newBlobId(), "dddddddddd");
+    await d.started(2);
+    c.finish();
+    d.finish();
+    expect([(await c.response).status, (await d.response).status]).toEqual([201, 201]);
+  });
+
+  it("an upload that ends with 500 gives its slot back", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const real = t.stores.blobFiles.writeTemp;
+    t.stores.blobFiles.writeTemp = () => Promise.reject(new Error("disk on fire"));
+    try {
+      expect((await uploadBlob(t, v, newBlobId(), "x")).status).toBe(500);
+      expect((await uploadBlob(t, v, newBlobId(), "y")).status).toBe(500);
+    } finally {
+      t.stores.blobFiles.writeTemp = real;
+    }
+    const c = heldBlobUpload(t, v, newBlobId(), "cccccccccc");
+    const d = heldBlobUpload(t, v, newBlobId(), "dddddddddd");
+    await d.started(2);
+    c.finish();
+    d.finish();
+    expect([(await c.response).status, (await d.response).status]).toEqual([201, 201]);
   });
 
   it("re-uploading an existing id is answered while two uploads run", async () => {
@@ -133,8 +179,7 @@ describe("two uploads per vault", () => {
     await uploadBlob(t, v, id, "first");
     const a = heldBlobUpload(t, v, newBlobId(), "aaaaaaaaaa");
     const b = heldBlobUpload(t, v, newBlobId(), "bbbbbbbbbb");
-    await a.started();
-    await new Promise((r) => setTimeout(r, 50));
+    await b.started(2);
     const again = await uploadBlob(t, v, id, "first");
     expect([again.status, await again.json()]).toEqual([200, { created: false }]);
     a.finish();

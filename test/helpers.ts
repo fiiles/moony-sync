@@ -47,8 +47,8 @@ export function testApp(overrides: Partial<Config> = {}, prepare?: (dataDir: str
   return { app, db, clock, dataDir, logs, call, stores: app.stores, disk };
 }
 
-export /** A body that counts the chunks the server pulled; each chunk is 64 KiB, `chunks` in all. */
-function countingBody(chunks = 40) {
+/** A body that counts the chunks the server pulled; each chunk is 64 KiB, `chunks` in all. */
+export function countingBody(chunks = 40) {
   const state = { pulled: 0 };
   const chunk = new Uint8Array(64 * 1024).fill(0x20);
   const body = new ReadableStream<Uint8Array>(
@@ -171,7 +171,9 @@ export function heldBlobUpload(t: TestApp, v: Vault, blobId: string, content: Ui
   } as RequestInit);
   return {
     response,
-    started: () => vi.waitFor(() => expect(blobFiles(t, v).some((f) => f.endsWith(".tmp"))).toBe(true)),
+    /** Resolves once `count` temporary files exist, i.e. that many uploads are streaming. */
+    started: (count = 1) =>
+      vi.waitFor(() => expect(blobFiles(t, v).filter((f) => f.endsWith(".tmp")).length).toBeGreaterThanOrEqual(count)),
     finish() {
       ctl.enqueue(bytes.subarray(2));
       ctl.close();

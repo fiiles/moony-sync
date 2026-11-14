@@ -58,7 +58,8 @@ blobs/<vault id>/<blob id>  attachment files (documents, photos, thumbnails), se
   directory sync fails after the rename the new file is removed again. The record for the file is
   written afterwards; a file without a record is an abandoned upload and housekeeping removes it
   once it is an hour old. Blob uploads are written the same way (temporary name, fsync, rename,
-  directory fsync).
+  directory fsync), except that the blob's record is inserted in the same transaction as the
+  rename, so a published blob file always has its record.
 - Time comes from one injected clock (unix seconds); every time-based rule is enforced at request
   time as well as by housekeeping, so a stopped server misses nothing.
 
@@ -70,7 +71,7 @@ database.
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `8787` | Listening port (0–65535; anything else stops the server at start) |
-| `DATA_DIR` | `/data` | Database and snapshots |
+| `DATA_DIR` | `/data` | Database, snapshots and blobs |
 | `PUBLIC_URL` | unset | The address apps use; the address saved in the admin takes precedence |
 | `TRUST_PROXY` | `0` | `1` behind one reverse proxy: the client address, scheme and host come from the **last** entry of `X-Forwarded-For` / `-Proto` / `-Host` |
 | `REQUIRE_2FA` | `0` | `1` makes the admin's second factor mandatory |
@@ -287,7 +288,7 @@ Headers: `Moony-Account: <account number>` for account calls and vault creation;
 | `GET` | `/v1/vaults/:vaultId` | → `{"head", "floor", "snapshotSeq", "paidUntil", "bytes", "rotation"}`. `rotation` is the latest rotation number (0 = never rotated); a device that sees it rise fetches the rekey bundles. |
 | `POST` | `/v1/vaults/:vaultId/ops` | Push. Body `{"ops": [{"id": "<op id>", "ct": "<base64>"}]}` → `{"head": n, "accepted": k}`. Duplicate op IDs are ignored (safe retries) while the op is still stored; after pruning the server no longer knows the ID, so clients must treat re-applying an op as harmless (per-column LWW already is). `413 quota_exceeded` past 256 MiB of op bytes, where each stored op is charged its ciphertext plus 128 bytes (the vault info `bytes` and the admin's space figures are this charge). |
 | `GET` | `/v1/vaults/:vaultId/ops?after=<seq>&limit=<n>` | Pull. → `{"ops": [{"seq", "id", "ct"}], "head", "more"}`. `410 snapshot_required` when `after < floor`. |
-| `PUT` | `/v1/vaults/:vaultId/snapshot?seq=<S>` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 snapshot_too_large` over 100 MiB). `S` = the op seq the snapshot includes (`400 snapshot_ahead_of_head`, `409 snapshot_outdated`; `507 server_full` when the data volume would have less than 1 GiB free after it). The body streams to disk; a body that ends early is `400 incomplete_body`. |
+| `PUT` | `/v1/vaults/:vaultId/snapshot?seq=<S>` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 snapshot_too_large` over 100 MiB). `S` = the op seq the snapshot includes (`400 snapshot_ahead_of_head`, `409 snapshot_outdated`; `507 server_full` when the data volume would have less than 1 GiB free after it, counting the uploads still in progress). The body streams to disk; a body that ends early is `400 incomplete_body`. |
 | `GET` | `/v1/vaults/:vaultId/snapshot` | Raw bytes; `Moony-Snapshot-Seq` header. `404 no_snapshot` when none. |
 | `POST` | `/v1/vaults/:vaultId/token` | Rotate. Body `{"token": "<new 43-char token>", "rekey": "<base64, ≤ 256 KiB decoded>"}`. The **current** token authorises; no entitlement needed. One transaction: the current token's hash becomes a previous token (read-only for 30 days), the new hash becomes current, the bundle is stored with the next rotation number (1, 2, …), the vault head at that moment and the time. → `200 {"rotation": n, "head": h}`. A previous token gets `403 token_read_only` (so of two concurrent rotations the second fails); a wrong token `401 unauthorized`; a malformed or already-used new token `400 invalid_token`; a missing or malformed bundle `400 invalid_rekey`; a bundle over 256 KiB `413 rekey_too_large`; a vault already holding 32 bundles `409 too_many_rotations` (housekeeping frees slots). |
 | `GET` | `/v1/vaults/:vaultId/rekey?after=<n>&limit=<k>` | Current or previous token. → `{"rekeys": [{"rotation", "head", "at", "rekey"}], "more": bool}` for rotations greater than `n` (default 0), oldest first; `limit` default 8, max 32, page cut at ~4 MiB of bundles (`more` says to ask again with the last `rotation`). Bundles older than 30 days are gone. |
@@ -303,12 +304,12 @@ pushed with the current token after a rotation are accepted as usual; the server
 Encrypted documents and photos, one file per blob, stored as `blobs/<vault id>/<blob id>`. A blob
 ID is a canonical lowercase UUID; anything else is `400 invalid_blob_id`, answered before any
 limiter, token check or file access. Every error answer of a blob route carries the same code in
-a `Moony-Error` header as well (a `HEAD` answer has no body). Blobs are immutable: an ID is
-written once.
+a `Moony-Error` header as well (a `HEAD` answer has no body). An upload never overwrites an
+existing blob; an ID can be used again after its blob was deleted (a new upload of it answers `201`).
 
 | Method | Path | Notes |
 |---|---|---|
-| `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes, `413 quota_exceeded` when the vault's blobs plus this one would pass its quota, `429 too_many_uploads` when two uploads of the vault are already running). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
+| `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes, `413 quota_exceeded` when the vault's blobs plus this one would pass its quota, `429 too_many_uploads` when two uploads of the vault are already running). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it, counting the uploads still in progress. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
 | `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current or previous token, also in the read grace. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
 | `GET` | `/v1/vaults/:vaultId/blobs/:blobId` | The same access as `HEAD`. Raw bytes, `Content-Length`, `Moony-Blob-Size`; `404 blob_not_found` (also for a record whose file is gone). |
 | `GET` | `/v1/vaults/:vaultId/blobs` | The same access as `HEAD`. Query `after` (a blob ID, exclusive; `400 invalid_blob_id` when malformed) and `limit` (default 500, at most 1000; `400 invalid_limit` below 1). → `{"blobs": [{"id", "size", "createdAt"}], "more": bool, "now": <unix seconds>}` in ID order; `more` says another page follows. `now` is the server's clock, so a device can measure a blob's age (`now - createdAt`) on the same clock that stamped `createdAt`. |
@@ -416,7 +417,7 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Blob | 104,883,275 bytes (100 MiB of content sealed by the app) |
 | Blob bytes per vault | 10 GiB by default, one setting for the whole server (admin Settings) |
 | Blob uploads per vault at once | 2, then `429 too_many_uploads` |
-| Free space kept on the data volume | 1 GiB; uploads that would go below it answer `507 server_full` |
+| Free space kept on the data volume | 1 GiB; uploads that would go below it answer `507 server_full`. The declared lengths of blob and snapshot uploads still in progress are counted as used until each ends |
 | Rekey bundle | 256 KiB decoded, 32 kept per vault |
 | Previous token (read-only) and rekey bundle | 30 days after the rotation |
 | Read grace after a block | 30 days |
@@ -447,7 +448,7 @@ it. An upload that finishes after the vault is gone is refused and its file remo
   must be readable), SHA-256 of the session cookies and of the unused backup codes, the saved
   server address, and while it is pending a setup code.
 - **Transiently, in memory only:** client addresses as rate-limit keys. Not stored, not logged.
-- It never learns device names or counts, profile names, or anything inside an op or snapshot.
+- It never learns device names or counts, profile names, or anything inside an op, snapshot or blob.
 - There is no payer to link to a vault. The admin sees names, sizes and last-activity times,
   never content. A database
   or backup leak exposes the account numbers (credentials for creating profiles, not for reading

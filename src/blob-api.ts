@@ -2,7 +2,6 @@
 // already validated the IDs, applied the limiters and parsed the bearer token. Blob bodies stream
 // to and from disk, never through the buffered-body budget.
 
-import { hasRoom } from "./disk.js";
 import { BodyIdleError, BodyStreamError } from "./files.js";
 import { errorResponse, json } from "./http.js";
 import {
@@ -83,17 +82,23 @@ export async function blobRoute(
     const length = /^[0-9]+$/.test(declared) ? Number(declared) : NaN;
     if (!Number.isSafeInteger(length) || length <= 0) return blobError(411, "length_required");
     if (length > MAX_BLOB_BYTES) return blobError(413, "blob_too_large");
-    if (!blobs.fits(vaultId, length)) return blobError(413, "quota_exceeded");
     if (!request.body) return blobError(400, "empty_body");
+    if (!blobs.fits(vaultId, length)) return blobError(413, "quota_exceeded");
 
-    if (!hasRoom(await rd.freeBytes(), length)) return blobError(507, "server_full");
-
-    const release = rd.uploads.tryEnter(vaultId);
-    if (!release) return blobError(429, "too_many_uploads");
+    // The free space is read first; the reservation is taken after the await, so the check and
+    // the reservation are one step.
+    const releaseSpace = rd.space.tryReserve(await rd.freeBytes(), length);
+    if (!releaseSpace) return blobError(507, "server_full");
     try {
-      return await receive(rd, request, vaultId, blobId, token, length);
+      const release = rd.uploads.tryEnter(vaultId);
+      if (!release) return blobError(429, "too_many_uploads");
+      try {
+        return await receive(rd, request, vaultId, blobId, token, length);
+      } finally {
+        release();
+      }
     } finally {
-      release();
+      releaseSpace();
     }
   }
 
