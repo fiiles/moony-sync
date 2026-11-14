@@ -201,13 +201,14 @@ numbers never appear in answers, except inside a connection code.
 | `GET` | `/admin/api/overview` | `{address, addressSuggestion, people, profiles, bytesUsed, bytesFree, lastActivity, version, insecure}` |
 | `GET` | `/admin/api/people` | `[{id, name, state, profiles, bytes, lastActivity, createdAt}]` |
 | `POST` | `/admin/api/people` | `{name}` → `201 {person, connectionCode}`. `400 invalid_name`; `409 address_not_set` until an address is saved or `PUBLIC_URL` is set |
-| `GET` | `/admin/api/people/:id` | The person plus `vaults: [{id, shortId, bytes, lastActivity}]` |
+| `GET` | `/admin/api/people/:id` | The person plus `vaults: [{id, shortId, bytes, files, lastActivity}]`; `bytes` counts ops, snapshots and blobs, `files` is the number of blob records |
 | `PATCH` | `/admin/api/people/:id` | Exactly one of `{name}` (`400 invalid_name`, also for a non-string) or `{state: "active" \| "blocked"}` |
 | `POST` | `/admin/api/people/:id/connection-code` | `{password}` → `{connectionCode}`; the same password check and attempt limit as login |
 | `DELETE` | `/admin/api/people/:id` | `204`; removes the person, their vaults and their snapshot and blob files |
 | `DELETE` | `/admin/api/people/:id/vaults/:vaultId` | `204`; removes one profile of that person |
-| `GET` | `/admin/api/settings` | `{publicUrl}` (the saved address or `null`) |
-| `PUT` | `/admin/api/settings` | `{publicUrl: string \| null}` → the normalised value; `400 invalid_address` |
+| `GET` | `/admin/api/settings` | `{publicUrl, blobQuotaBytes}` (the saved address or `null`; the per-vault blob quota, default 10 GiB) |
+| `PUT` | `/admin/api/settings` | Exactly one key. `{publicUrl: string \| null}` → `{publicUrl}`, the normalised value; `400 invalid_address`. `{blobQuotaBytes: integer}` (0 to 2^50) → `{blobQuotaBytes}`; `400 invalid_quota`. No key, both or another key: `400 invalid_request` |
+| `GET` | `/admin/api/backup/size` | `{estimatedBytes}`: what the archive will roughly weigh (an estimate, the database copy differs from the files) |
 | `GET` | `/admin/api/backup` | `application/x-tar`, `moony-sync-backup-<YYYYMMDD-HHmm>.tar` (UTC) |
 
 Every route except the three public ones needs a session (`401 unauthorized`).
@@ -238,8 +239,10 @@ is not single-use. Revocation is blocking or deleting the person.
 `GET /admin/api/backup` streams a ustar archive: `moony-sync.db` (an SQLite online-backup copy,
 consistent while the server runs, taken into a temporary file in `DATA_DIR` that is removed when
 the download ends, fails or is abandoned, and by the next start) and
-`snapshots/<vault id>/<file>` for every snapshot file, streamed from disk, with directory entries
-for `snapshots/` and each vault directory. Every entry is owned by uid/gid 1000 (the container's
+`snapshots/<vault id>/<file>` for every snapshot file and `blobs/<vault id>/<file>` for every
+blob file (never a temporary one), streamed from disk, with directory entries for `snapshots/`,
+`blobs/` and each vault directory. With documents and photos the archive can be large; the admin
+Backup page shows `GET /admin/api/backup/size` first. Every entry is owned by uid/gid 1000 (the container's
 `node` user), files are mode 0600 and directories 0700, so extracting as root still gives files the
 container can use. `HEAD` answers the headers without building a copy. A single file of 8 GiB
 or more is refused with an error instead of writing a corrupt header. The archive holds account
@@ -433,7 +436,8 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 - **Per vault:** the account it belongs to, the SHA-256 of the current token and of tokens rotated
   away in the last 30 days (with when), rekey bundles (opaque ciphertext) with their rotation
   number, head and time, op sizes, op IDs, the time each op arrived, snapshot sizes and times,
-  blob IDs (random UUIDs the app chooses), sizes and upload times,
+  the number of blobs, each blob's ID (a random UUID the app chooses), size and upload time
+  (sizes are not padded),
   and the **time of the last authorised request** (rounded to the minute), which the admin sees as
   a person's last activity.
 - **Pairing mailboxes:** while one exists (at most 10 minutes), the slot contents, which are an

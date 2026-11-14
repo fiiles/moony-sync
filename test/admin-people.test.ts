@@ -3,7 +3,8 @@ import { OP_OVERHEAD_BYTES } from "../src/limits.js";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decodeConnectionCode } from "../src/connection-code.js";
-import { ADMIN_PASSWORD, adminSession, newVault, pull, push, setupAdmin, snapshotFiles, testApp, uploadSnapshot } from "./helpers.js";
+import { blobQuotaBytes } from "../src/blobs.js";
+import { ADMIN_PASSWORD, adminSession, newBlobId, newVault, pull, push, setupAdmin, snapshotFiles, testApp, uploadBlob, uploadSnapshot } from "./helpers.js";
 import type { TestApp } from "./helpers.js";
 
 const ADDRESS = "https://sync.example";
@@ -33,7 +34,7 @@ describe("guard", () => {
     const routes: [string, string][] = [
       ["GET", "overview"], ["GET", "people"], ["POST", "people"], ["GET", "people/x"], ["PATCH", "people/x"],
       ["POST", "people/x/connection-code"], ["DELETE", "people/x"], ["DELETE", "people/x/vaults/y"],
-      ["GET", "settings"], ["PUT", "settings"], ["GET", "backup"],
+      ["GET", "settings"], ["PUT", "settings"], ["GET", "backup"], ["GET", "backup/size"],
     ];
     for (const [m, p] of routes) expect([m, p, (await anon.call(m, p, m === "GET" ? undefined : {})).status]).toEqual([m, p, 401]);
   });
@@ -48,13 +49,30 @@ describe("guard", () => {
   });
 });
 
+describe("space figures", () => {
+  it("space figures include blobs; the profile shows its file count", async () => {
+    const { t, s } = await ready();
+    const person = t.stores.people.create("Anna");
+    const v = await newVault(t, person.account);
+    await push(t, v, [{ id: "a", ct: btoa("12345") }]);
+    expect((await uploadBlob(t, v, newBlobId(), new Uint8Array(1000))).status).toBe(201);
+    const people = await json(await s.call("GET", "people"));
+    expect(people[0].bytes).toBe(5 + OP_OVERHEAD_BYTES + 1000);
+    expect((await json(await s.call("GET", "overview"))).bytesUsed).toBe(5 + OP_OVERHEAD_BYTES + 1000);
+    const detail = await json(await s.call("GET", `people/${person.id}`));
+    expect(detail.vaults[0]).toEqual({
+      id: v.id, shortId: v.id.slice(0, 6), bytes: 5 + 128 + 1000, files: 1, lastActivity: expect.any(Number),
+    });
+  });
+});
+
 describe("settings and the address", () => {
   it("saves a normalised address, clears it with null, refuses a bad one", async () => {
     const { s } = await ready();
-    expect(await json(await s.call("GET", "settings"))).toEqual({ publicUrl: null });
+    expect(await json(await s.call("GET", "settings"))).toEqual({ publicUrl: null, blobQuotaBytes: 10737418240 });
     const put = await s.call("PUT", "settings", { publicUrl: "HTTPS://Sync.Example:443/" });
     expect([put.status, await json(put)]).toEqual([200, { publicUrl: ADDRESS }]);
-    expect(await json(await s.call("GET", "settings"))).toEqual({ publicUrl: ADDRESS });
+    expect(await json(await s.call("GET", "settings"))).toEqual({ publicUrl: ADDRESS, blobQuotaBytes: 10737418240 });
     for (const bad of ["ftp://x.example", "https://x.example/path", "nonsense", 5]) {
       const r = await s.call("PUT", "settings", { publicUrl: bad });
       expect([bad, r.status, await json(r)]).toEqual([bad, 400, { error: "invalid_address" }]);
@@ -63,8 +81,31 @@ describe("settings and the address", () => {
     expect((await s.call("PUT", "settings", [])).status).toBe(400);
     const cleared = await s.call("PUT", "settings", { publicUrl: null });
     expect(await json(cleared)).toEqual({ publicUrl: null });
-    expect(await json(await s.call("GET", "settings"))).toEqual({ publicUrl: null });
+    expect(await json(await s.call("GET", "settings"))).toEqual({ publicUrl: null, blobQuotaBytes: 10737418240 });
   });
+
+  it("blob quota setting: default, save, validation, effect", async () => {
+    const { t, s } = await ready();
+    expect(await json(await s.call("GET", "settings"))).toEqual({ publicUrl: null, blobQuotaBytes: 10737418240 });
+    const put = await s.call("PUT", "settings", { blobQuotaBytes: 5 * 1024 ** 3 });
+    expect([put.status, await json(put)]).toEqual([200, { blobQuotaBytes: 5368709120 }]);
+    expect(blobQuotaBytes(t.db)).toBe(5368709120);
+    expect((await json(await s.call("GET", "settings"))).blobQuotaBytes).toBe(5368709120);
+    for (const bad of [-1, 1.5, "10", null, true, 2 ** 50 + 1]) {
+      const r = await s.call("PUT", "settings", { blobQuotaBytes: bad });
+      expect([bad, r.status, await json(r)]).toEqual([bad, 400, { error: "invalid_quota" }]);
+    }
+    for (const ok of [0, 2 ** 50]) expect((await s.call("PUT", "settings", { blobQuotaBytes: ok })).status).toBe(200);
+    for (const body of [{ publicUrl: ADDRESS, blobQuotaBytes: 1 }, {}, [], { other: 1 }, { blobQuotaBytes: 1, other: 1 }]) {
+      const r = await s.call("PUT", "settings", body);
+      expect([body, r.status, await json(r)]).toEqual([body, 400, { error: "invalid_request" }]);
+    }
+    expect((await s.call("PUT", "settings", { blobQuotaBytes: 10 })).status).toBe(200);
+    const v = await newVault(t);
+    const r = await uploadBlob(t, v, newBlobId(), new Uint8Array(11));
+    expect([r.status, await json(r)]).toEqual([413, { error: "quota_exceeded" }]);
+  });
+
 
   it("POST people needs an address: 409 address_not_set until saved; PUBLIC_URL counts", async () => {
     const { s } = await ready();
@@ -159,7 +200,7 @@ describe("people", () => {
     await push(t, v, [{ id: "a", ct: btoa("123") }]);
     const r = await json(await s.call("GET", `people/${a.person.id}`));
     expect(r).toMatchObject({ id: a.person.id, name: "Anna", profiles: 1, bytes: 3 + OP_OVERHEAD_BYTES });
-    expect(r.vaults).toEqual([{ id: v.id, shortId: v.id.slice(0, 6), bytes: 3 + OP_OVERHEAD_BYTES, lastActivity: expect.any(Number) }]);
+    expect(r.vaults).toEqual([{ id: v.id, shortId: v.id.slice(0, 6), bytes: 3 + OP_OVERHEAD_BYTES, files: 0, lastActivity: expect.any(Number) }]);
     const none = await s.call("GET", "people/nope");
     expect([none.status, await json(none)]).toEqual([404, { error: "person_not_found" }]);
   });

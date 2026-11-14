@@ -152,8 +152,9 @@ host other than `localhost`.
 
 ## Backup and restore
 
-Admin page, **Backup**, **Download backup**: a `.tar` with a consistent copy of the database and
-all snapshot files. It can be taken while the server runs.
+Admin page, **Backup**, **Download backup**: a `.tar` with a consistent copy of the database,
+all snapshot files and all documents and photos. It can be taken while the server runs. With
+documents and photos it can be large, so the page shows an estimate of its size first.
 
 **Keep the archive private.** Besides the encrypted data it holds each person's account number
 (needed to show a connection code again) and the second-factor secret in readable form, plus

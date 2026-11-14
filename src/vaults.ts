@@ -93,7 +93,7 @@ export interface Vaults {
   /** Unconditional delete (admin). */
   wipe(vaultId: string): void;
   /** Every vault with its stored bytes (ops + snapshot files) and last activity, oldest first. */
-  usage(): { vaultId: string; account: string; bytes: number; lastActivity: number | null }[];
+  usage(): { vaultId: string; account: string; bytes: number; files: number; lastActivity: number | null }[];
   /** Drops every vault row of the account at once (calls answer vault_not_found from here on) and
    *  returns the IDs; joins an outer transaction. Finish with `finishWipes`. */
   dropAccount(account: string): string[];
@@ -193,7 +193,9 @@ export function createVaults(
     allIds: db.prepare("SELECT vault_id FROM vaults ORDER BY created_at, rowid"),
     usage: db.prepare(
       `SELECT v.vault_id, v.account, v.last_activity,
-              v.bytes + COALESCE((SELECT SUM(s.size) FROM snapshots s WHERE s.vault_id = v.vault_id), 0) AS total
+              v.bytes + COALESCE((SELECT SUM(s.size) FROM snapshots s WHERE s.vault_id = v.vault_id), 0)
+                      + COALESCE((SELECT SUM(b.size) FROM blobs b WHERE b.vault_id = v.vault_id), 0) AS total,
+              (SELECT COUNT(*) FROM blobs b WHERE b.vault_id = v.vault_id) AS files
        FROM vaults v ORDER BY v.created_at, v.rowid`,
     ),
     byAccount: db.prepare(
@@ -547,8 +549,20 @@ export function createVaults(
 
     usage: () =>
       (
-        q.usage.all() as { vault_id: string; account: string; last_activity: number | null; total: number }[]
-      ).map((r) => ({ vaultId: r.vault_id, account: r.account, bytes: r.total, lastActivity: r.last_activity })),
+        q.usage.all() as {
+          vault_id: string;
+          account: string;
+          last_activity: number | null;
+          total: number;
+          files: number;
+        }[]
+      ).map((r) => ({
+        vaultId: r.vault_id,
+        account: r.account,
+        bytes: r.total,
+        files: r.files,
+        lastActivity: r.last_activity,
+      })),
 
     dropAccount: atomic((account: string) => {
       const ids = (q.byAccount.all(account) as { vault_id: string }[]).map((r) => r.vault_id);

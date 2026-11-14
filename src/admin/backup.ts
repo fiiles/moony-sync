@@ -1,12 +1,13 @@
 // The backup download: a ustar archive of the SQLite database (an online-backup copy, so it is
-// consistent while the server runs) and the snapshot files. Built here, no shelling out;
-// snapshot files are streamed from disk, never held in memory.
+// consistent while the server runs) and the snapshot and blob files. Built here, no shelling
+// out; the files are streamed from disk, never held in memory.
 
 import { randomUUID } from "node:crypto";
-import { readdirSync, rmSync } from "node:fs";
+import { readdirSync, rmSync, statSync } from "node:fs";
 import { open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import type { BlobFiles } from "../blob-files.js";
 import type { Db } from "../db.js";
 import type { Snapshots } from "../snapshots.js";
 
@@ -87,6 +88,7 @@ export async function createBackupStream(opts: {
   db: Db;
   dataDir: string;
   snapshots: Snapshots;
+  blobFiles: BlobFiles;
   now: number;
 }): Promise<ReadableStream<Uint8Array>> {
   const tmp = join(opts.dataDir, `.backup-${randomUUID()}.tmp`);
@@ -100,6 +102,13 @@ export async function createBackupStream(opts: {
       dirs.push(`snapshots/${vaultId}/`);
       for (const { file } of opts.snapshots.listFiles(vaultId)) {
         files.push({ name: `snapshots/${vaultId}/${file}`, path: join(opts.dataDir, "snapshots", vaultId, file) });
+      }
+    }
+    dirs.push("blobs/");
+    for (const { vaultId } of opts.blobFiles.listVaultDirs()) {
+      dirs.push(`blobs/${vaultId}/`);
+      for (const { blobId } of opts.blobFiles.listFiles(vaultId)) {
+        files.push({ name: `blobs/${vaultId}/${blobId}`, path: join(opts.dataDir, "blobs", vaultId, blobId) });
       }
     }
     const gen = entries(dirs, files, opts.now);
@@ -120,6 +129,30 @@ export async function createBackupStream(opts: {
     await rm(tmp, { force: true });
     throw e;
   }
+}
+
+/** What the archive will roughly weigh: the database files, a header and padded content per
+ *  snapshot and blob record, a header per directory, the end blocks. An estimate: the database
+ *  copy differs from the files on disk. */
+export function estimateBackupBytes(db: Db, dataDir: string): number {
+  const onDisk = (name: string): number => {
+    try {
+      return statSync(join(dataDir, name)).size;
+    } catch {
+      return 0;
+    }
+  };
+  const entry = (size: number): number => BLOCK + Math.ceil(size / BLOCK) * BLOCK;
+  let total = onDisk("moony-sync.db") + onDisk("moony-sync.db-wal") + BLOCK;
+  const vaultDirs = new Set<string>();
+  for (const table of ["snapshots", "blobs"]) {
+    const rows = db.prepare(`SELECT vault_id, size FROM ${table}`).all() as { vault_id: string; size: number }[];
+    for (const r of rows) {
+      total += entry(r.size);
+      vaultDirs.add(`${table}/${r.vault_id}`);
+    }
+  }
+  return total + BLOCK * (2 + vaultDirs.size) + 2 * BLOCK;
 }
 
 /** Removes database copies a crash left behind (a download that never finished); run at start,

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_TAR_ENTRY_BYTES, tarHeader } from "../src/admin/backup.js";
-import { newVault, push, setupAdmin, testApp, uploadSnapshot } from "./helpers.js";
+import { blobFiles, newBlobId, newVault, push, setupAdmin, testApp, uploadBlob, uploadSnapshot } from "./helpers.js";
 
 /** A minimal ustar reader: name → bytes. Verifies each header checksum. */
 function untar(buf: Buffer, dirs?: Map<string, Buffer>): Map<string, Buffer> {
@@ -115,7 +115,7 @@ describe("GET /admin/api/backup", () => {
     const buf = Buffer.from(await (await s.call("GET", "backup")).arrayBuffer());
     const dirs = new Map<string, Buffer>();
     untar(buf, dirs);
-    expect([...dirs.keys()].sort()).toEqual(["snapshots/", `snapshots/${v.id}/`]);
+    expect([...dirs.keys()].sort()).toEqual(["blobs/", "snapshots/", `snapshots/${v.id}/`]);
     for (const h of dirs.values()) {
       expect(field(h, 100, 108)).toBe(0o700);
       expect(field(h, 108, 116)).toBe(1000);
@@ -137,6 +137,33 @@ describe("GET /admin/api/backup", () => {
       off += 512 + Math.ceil(size / 512) * 512;
     }
     expect(files).toBe(2);
+  });
+
+  it("the archive holds blobs/<vault>/<id> with the exact bytes, never a temp", async () => {
+    const t = testApp();
+    const s = await setupAdmin(t);
+    const v = await newVault(t);
+    const id = newBlobId();
+    const content = Uint8Array.from({ length: 1300 }, (_, i) => i % 251);
+    expect((await uploadBlob(t, v, id, content)).status).toBe(201);
+    writeFileSync(join(t.dataDir, "blobs", v.id, `${newBlobId()}.${newBlobId()}.tmp`), "half");
+    expect(blobFiles(t, v)).toHaveLength(2);
+    const dirs = new Map<string, Buffer>();
+    const files = untar(Buffer.from(await (await s.call("GET", "backup")).arrayBuffer()), dirs);
+    expect([...dirs.keys()].sort()).toEqual(["blobs/", `blobs/${v.id}/`, "snapshots/"]);
+    expect([...files.keys()].filter((k) => k.startsWith("blobs/"))).toEqual([`blobs/${v.id}/${id}`]);
+    expect(Buffer.compare(files.get(`blobs/${v.id}/${id}`)!, Buffer.from(content))).toBe(0);
+  });
+
+  it("backup/size: a number that grows by at least the rounded size plus a header per blob", async () => {
+    const t = testApp();
+    const s = await setupAdmin(t);
+    const v = await newVault(t);
+    const size = async () => ((await (await s.call("GET", "backup/size")).json()) as { estimatedBytes: number }).estimatedBytes;
+    const before = await size();
+    expect(Number.isInteger(before)).toBe(true);
+    expect((await uploadBlob(t, v, newBlobId(), new Uint8Array(1000))).status).toBe(201);
+    expect(await size()).toBeGreaterThanOrEqual(before + 1024 + 512);
   });
 
   it("HEAD answers without building a backup copy", async () => {
