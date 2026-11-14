@@ -1,0 +1,38 @@
+{
+  "name": "moony-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "moony-sync": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc -p admin-ui/tsconfig.json --noEmit",
+    "dev:ui": "vite",
+    "build": "vite build && tsc -p tsconfig.build.json",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.8",
+    "@node-rs/argon2": "^2.2.2",
+    "better-sqlite3": "^13.1.1",
+    "hono": "^4.13.18"
+  },
+  "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@preact/preset-vite": "^2.10.6",
+    "@testing-library/preact": "^3.2.6",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.19.2",
+    "jsdom": "^29.1.1",
+    "preact": "^11.2.0",
+    "qrcode-generator": "^2.0.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

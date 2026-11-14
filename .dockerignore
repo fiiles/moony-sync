@@ -1,0 +1,14 @@
+node_modules
+dist
+admin-ui/dist
+data
+.git
+.gitignore
+.superpowers
+.playwright-mcp
+Dockerfile
+compose.yml
+*.md
+coverage
+test
+admin-ui/test

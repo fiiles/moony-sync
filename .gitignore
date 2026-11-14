@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+admin-ui/dist/
+data/
+.superpowers/tmp-run/
