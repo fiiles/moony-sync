@@ -1,8 +1,18 @@
 // File helpers shared by the snapshot and blob stores.
 
-import { closeSync, existsSync, fsyncSync, openSync, readdirSync, statSync } from "node:fs";
-import type { FileHandle } from "node:fs/promises";
+import {
+  closeSync,
+  createReadStream,
+  existsSync,
+  fstatSync,
+  fsyncSync,
+  openSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
+import { open, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
+import { PassThrough, Readable } from "node:stream";
 import { isVaultId } from "./encoding.js";
 
 /** Makes a rename durable. Not every platform can fsync a directory; that is not an error. */
@@ -106,4 +116,62 @@ export function listVaultDirs(root: string): { vaultId: string; mtime: number }[
     out.push({ vaultId, mtime: newest });
   }
   return out;
+}
+
+/** Streams `body` to a new file `path` (mode 0600, created with "wx"), fsyncs and closes it.
+ *  Returns the bytes written, or "too_large" past `maxBytes`. In every non-success case the
+ *  file is removed and the error rethrown. */
+export async function writeNewFile(
+  path: string,
+  body: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  idleMs?: number,
+): Promise<number | "too_large"> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, "wx", 0o600);
+    const size = await streamToFile(handle, body, maxBytes, idleMs);
+    if (size === "too_large") {
+      await handle.close().catch(() => undefined);
+      handle = undefined;
+      await rm(path, { force: true });
+      return "too_large";
+    }
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    return size;
+  } catch (e) {
+    await handle?.close().catch(() => undefined);
+    await rm(path, { force: true });
+    throw e;
+  }
+}
+
+/** Opens `path` once: the size and the bytes come from the same descriptor, so a vault deleted
+ *  meanwhile cannot turn the read into an error that names the path. null when it cannot be
+ *  opened. A read error destroys the stream with `new Error(readError)`. */
+export function openRead(
+  path: string,
+  readError: string,
+): { stream: ReadableStream<Uint8Array>; size: number } | null {
+  let fd: number;
+  let size: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return null;
+  }
+  try {
+    size = fstatSync(fd).size;
+  } catch {
+    closeSync(fd);
+    return null;
+  }
+  const source = createReadStream("", { fd, autoClose: true });
+  const out = new PassThrough();
+  source.on("error", () => out.destroy(new Error(readError)));
+  out.on("close", () => source.destroy());
+  source.pipe(out);
+  return { stream: Readable.toWeb(out) as ReadableStream<Uint8Array>, size };
 }

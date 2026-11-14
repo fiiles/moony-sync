@@ -4,22 +4,16 @@
 
 import { randomUUID } from "node:crypto";
 import {
-  closeSync,
-  createReadStream,
   existsSync,
-  fstatSync,
   mkdirSync,
-  openSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
 } from "node:fs";
-import { open, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import { PassThrough, Readable } from "node:stream";
 import { isBlobId, isVaultId } from "./encoding.js";
-import { listVaultDirs, streamToFile, syncDir } from "./files.js";
+import { listVaultDirs, openRead, syncDir, writeNewFile } from "./files.js";
 
 export interface BlobFiles {
   /** Streams `body` to "<blobId>.<random uuid>.tmp" (mode 0600, created with "wx") in the vault's
@@ -64,25 +58,8 @@ export function createBlobFiles(root: string): BlobFiles {
       mkdirSync(dir, { recursive: true });
       const tmpName = `${blobId}.${randomUUID()}${TMP_SUFFIX}`;
       const tmp = join(dir, tmpName);
-      let handle: FileHandle | undefined;
-      try {
-        handle = await open(tmp, "wx", 0o600);
-        const size = await streamToFile(handle, body, maxBytes, idleMs);
-        if (size === "too_large") {
-          await handle.close().catch(() => undefined);
-          handle = undefined;
-          await rm(tmp, { force: true });
-          return "too_large";
-        }
-        await handle.sync();
-        await handle.close();
-        handle = undefined;
-        return { tmp: tmpName, size };
-      } catch (e) {
-        await handle?.close().catch(() => undefined);
-        await rm(tmp, { force: true });
-        throw e;
-      }
+      const size = await writeNewFile(tmp, body, maxBytes, idleMs);
+      return size === "too_large" ? size : { tmp: tmpName, size };
     },
 
     publish(vaultId, blobId, tmp) {
@@ -105,27 +82,7 @@ export function createBlobFiles(root: string): BlobFiles {
 
     open(vaultId, blobId) {
       if (!isVaultId(vaultId) || !isBlobId(blobId)) return null;
-      // One open file: the size and the bytes come from the same descriptor, so a vault deleted
-      // meanwhile cannot turn the read into an error that names the path.
-      let fd: number;
-      let size: number;
-      try {
-        fd = openSync(join(dirOf(vaultId), blobId), "r");
-      } catch {
-        return null;
-      }
-      try {
-        size = fstatSync(fd).size;
-      } catch {
-        closeSync(fd);
-        return null;
-      }
-      const source = createReadStream("", { fd, autoClose: true });
-      const out = new PassThrough();
-      source.on("error", () => out.destroy(new Error("blob_read_failed")));
-      out.on("close", () => source.destroy());
-      source.pipe(out);
-      return { stream: Readable.toWeb(out) as ReadableStream<Uint8Array>, size };
+      return openRead(join(dirOf(vaultId), blobId), "blob_read_failed");
     },
 
     size(vaultId, blobId) {

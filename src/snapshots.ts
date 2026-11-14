@@ -14,11 +14,9 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { open, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import { PassThrough, Readable } from "node:stream";
 import { isVaultId } from "./encoding.js";
-import { listVaultDirs, streamToFile, syncDir } from "./files.js";
+import { listVaultDirs, openRead, syncDir, writeNewFile } from "./files.js";
 
 export { BodyStreamError as SnapshotBodyError } from "./files.js";
 
@@ -66,19 +64,9 @@ export function createSnapshots(root: string): Snapshots {
       mkdirSync(dir, { recursive: true });
       const file = `${seq}-${randomUUID()}`;
       const tmp = join(dir, file + TMP_SUFFIX);
-      let handle: FileHandle | undefined;
+      const size = await writeNewFile(tmp, body, maxBytes);
+      if (size === "too_large") return "too_large";
       try {
-        handle = await open(tmp, "wx", 0o600);
-        const size = await streamToFile(handle, body, maxBytes);
-        if (size === "too_large") {
-          await handle.close().catch(() => undefined);
-          handle = undefined;
-          await rm(tmp, { force: true });
-          return "too_large";
-        }
-        await handle.sync();
-        await handle.close();
-        handle = undefined;
         renameSync(tmp, join(dir, file));
         try {
           syncDir(dir);
@@ -87,37 +75,16 @@ export function createSnapshots(root: string): Snapshots {
           rmSync(join(dir, file), { force: true });
           throw e;
         }
-        return { file, size };
       } catch (e) {
-        await handle?.close().catch(() => undefined);
-        await rm(tmp, { force: true });
+        rmSync(tmp, { force: true });
         throw e;
       }
+      return { file, size };
     },
 
     open(vaultId, file) {
       if (!isVaultId(vaultId) || !FILE_RE.test(file)) return null;
-      // One open file: the size and the bytes come from the same descriptor, so a vault deleted
-      // meanwhile cannot turn the read into an error that names the path.
-      let fd: number;
-      let size: number;
-      try {
-        fd = openSync(join(dirOf(vaultId), file), "r");
-      } catch {
-        return null;
-      }
-      try {
-        size = fstatSync(fd).size;
-      } catch {
-        closeSync(fd);
-        return null;
-      }
-      const source = createReadStream("", { fd, autoClose: true });
-      const out = new PassThrough();
-      source.on("error", () => out.destroy(new Error("snapshot_read_failed")));
-      out.on("close", () => source.destroy());
-      source.pipe(out);
-      return { stream: Readable.toWeb(out) as ReadableStream<Uint8Array>, size };
+      return openRead(join(dirOf(vaultId), file), "snapshot_read_failed");
     },
 
     remove(vaultId, file) {
