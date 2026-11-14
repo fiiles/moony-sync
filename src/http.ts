@@ -1,4 +1,4 @@
-import { IDLE_BODY_SECONDS } from "./limits.js";
+import { IDLE_BODY_SECONDS, MAX_INFLIGHT_BODY_CLIENT_BYTES } from "./limits.js";
 
 // Response helpers and the `Result` type service functions return; routes map it to HTTP.
 
@@ -28,21 +28,34 @@ export function fromResult(r: Failure | ({ ok: true } & object), status = 200): 
  *  sends headers and then nothing holds nothing. Snapshot uploads stream to disk and do not use
  *  it. */
 export interface BodyBudget {
-  /** False when `bytes` more would pass the limit (nothing is reserved then). */
-  tryReserve(bytes: number): boolean;
-  release(bytes: number): void;
+  /** False when `bytes` more would pass the global limit or the client's share (nothing is
+   *  reserved then). `client` is the limiters' client key. */
+  tryReserve(client: string, bytes: number): boolean;
+  release(client: string, bytes: number): void;
 }
 
-export function createBodyBudget(limit: number): BodyBudget {
+/** A budget and the client a body is charged to; every capped read needs one. */
+export interface BodyShare {
+  budget: BodyBudget;
+  client: string;
+}
+
+export function createBodyBudget(limit: number, perClient: number = MAX_INFLIGHT_BODY_CLIENT_BYTES): BodyBudget {
   let used = 0;
+  const byClient = new Map<string, number>();
   return {
-    tryReserve(bytes) {
-      if (used + bytes > limit) return false;
+    tryReserve(client, bytes) {
+      const mine = byClient.get(client) ?? 0;
+      if (used + bytes > limit || mine + bytes > perClient) return false;
       used += bytes;
+      byClient.set(client, mine + bytes);
       return true;
     },
-    release(bytes) {
+    release(client, bytes) {
       used = Math.max(0, used - bytes);
+      const left = (byClient.get(client) ?? 0) - bytes;
+      if (left > 0) byClient.set(client, left);
+      else byClient.delete(client);
     },
   };
 }
@@ -56,7 +69,7 @@ export type BodyResult = { bytes: Uint8Array } | { error: string; status: number
 export async function readBody(
   request: Request,
   maxBytes: number,
-  budget?: BodyBudget,
+  share: BodyShare,
   idleMs: number = IDLE_BODY_SECONDS * 1000,
 ): Promise<BodyResult> {
   const tooLarge = { error: "body_too_large", status: 413 };
@@ -94,17 +107,15 @@ export async function readBody(
         void reader.cancel().catch(() => undefined);
         return tooLarge;
       }
-      if (budget) {
-        if (!budget.tryReserve(r.value.byteLength)) {
-          void reader.cancel().catch(() => undefined);
-          return { error: "busy", status: 503 };
-        }
-        reserved += r.value.byteLength;
+      if (!share.budget.tryReserve(share.client, r.value.byteLength)) {
+        void reader.cancel().catch(() => undefined);
+        return { error: "busy", status: 503 };
       }
+      reserved += r.value.byteLength;
       chunks.push(r.value);
     }
   } finally {
-    if (budget) budget.release(reserved);
+    if (reserved > 0) share.budget.release(share.client, reserved);
   }
   const out = new Uint8Array(total);
   let offset = 0;
@@ -119,10 +130,10 @@ export async function readBody(
 export async function readJson(
   request: Request,
   maxBytes: number,
-  budget?: BodyBudget,
+  share: BodyShare,
   idleMs?: number,
 ): Promise<{ value: unknown } | { error: string; status: number }> {
-  const r = await readBody(request, maxBytes, budget, idleMs);
+  const r = await readBody(request, maxBytes, share, idleMs);
   if ("error" in r) return r;
   try {
     return { value: JSON.parse(new TextDecoder().decode(r.bytes)) };

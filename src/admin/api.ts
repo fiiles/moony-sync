@@ -86,7 +86,7 @@ export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: Body
 
   /** A JSON object body, or the error response to return. */
   async function readObject(c: Ctx): Promise<Record<string, unknown> | Response> {
-    const r = await readJson(c.req.raw, MAX_BODY, budget);
+    const r = await readJson(c.req.raw, MAX_BODY, { budget, client: who(c) });
     if ("error" in r) return errorResponse(r.status, r.error);
     if (typeof r.value !== "object" || r.value === null || Array.isArray(r.value)) {
       return errorResponse(400, "invalid_request");

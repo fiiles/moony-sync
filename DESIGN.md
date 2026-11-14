@@ -316,7 +316,10 @@ expiry plus the sweep); after that only the tombstone remains.
 All open slots together may hold 64 MiB; a `PUT` that would pass that answers `503 busy` and
 stores nothing. One client key (IPv4 address, or IPv6 /64) may hold at most 8 MiB in open
 slots; beyond that its `PUT` answers `503 busy`, others are unaffected. The writer's key is stored
-with the slot only as a SHA-256 (never the address) and is cleared when the slot is read or burnt.
+with the slot only as an HMAC-SHA-256 under a random key that exists only in the process's memory
+(an IPv4 address cannot be recovered from it), and is cleared when the slot is read or burnt. After
+a restart the old values match nobody: they are cleared at start, those slots count toward the
+global total only and are gone within about 11 minutes.
 The totals are kept in memory, updated by every put, read, burn and expiry, and recomputed from
 the table at start and in each minute sweep.
 
@@ -343,7 +346,9 @@ buffer more than the limit; snapshot uploads stream to disk. A push or token rot
 by its token (unknown vault, wrong or read-only token, blocked person) **before** its body is
 read. All bodies being buffered at once, on the sync and the admin API together, share 64 MiB.
 A body reserves bytes as they arrive (never what it declares), so an idle connection holds
-nothing; a chunk that does not fit answers `503 busy`. A body that delivers no bytes for 30
+nothing, and one client key (IPv4 address or IPv6 /64, proxy-aware like the limiters) may have at
+most 8 MiB of arrived-and-held bytes in flight, so one address cannot starve the rest by
+trickling bodies; a chunk that does not fit answers `503 busy`. A body that delivers no bytes for 30
 seconds is aborted with `408 {"error":"body_timeout"}`. Snapshot uploads stream to disk and are
 exempt from both.
 
@@ -385,7 +390,7 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Pairing slot | 1 byte – 64 KiB, write-once, read-once |
 | Pairing mailbox lifetime | 10 minutes (ID burnt 24 h more); contents swept within a minute after |
 | Bytes in open pairing slots, all mailboxes | 64 MiB, then `503 busy` |
-| Request bodies buffered at once (sync + admin) | 64 MiB of arrived bytes, then `503 busy`; idle 30 s → `408 body_timeout` |
+| Request bodies buffered at once (sync + admin) | 64 MiB of arrived bytes (8 MiB per client key), then `503 busy`; idle 30 s → `408 body_timeout` |
 | Open pairing slots per client key | 8 MiB, then `503 busy` |
 | Admin session | 12 hours without use |
 | Admin request body | 16 KiB |

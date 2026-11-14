@@ -239,7 +239,7 @@ Pairing mailboxes hold their contents for at most about 11 minutes (10-minute ex
 that runs every minute); after that only a content-free tombstone remains. Limits that answer
 `503 {"error":"busy"}`: all open pairing slots together hold at most 64 MiB (one client address, or IPv6 /64, at most
 8 MiB of that), and request bodies being buffered at one moment (sync and admin API together;
-snapshot uploads stream to disk and do not count) share 64 MiB, reserved as the bytes arrive. A
+snapshot uploads stream to disk and do not count) share 64 MiB (one client address, or IPv6 /64, at most 8 MiB of it), reserved as the bytes arrive. A
 body that delivers nothing for 30 seconds is aborted with `408 {"error":"body_timeout"}`. With `TRUST_PROXY=1` the **last** `X-Forwarded-For` entry is the client
 address.
 
@@ -252,7 +252,7 @@ address.
   a vault token.
 - **Quota and parallel uploads.** A person's op quota is 256 MiB, counted as the ciphertext plus
   128 bytes per change (so many tiny changes cannot use up the disk unnoticed); real disk use is
-  still somewhat higher because of database indexes and the write-ahead log. Snapshot uploads
+  still higher because of row and index overhead beyond the 128 bytes charged: for very small changes the real disk cost can be up to about twice the quota. Snapshot uploads
   (100 MiB each, 2 kept per profile) are not limited in parallel.
 
 ## Development

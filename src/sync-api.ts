@@ -152,7 +152,7 @@ async function vaultRoute(
       // The token is judged before a single body byte is read.
       const allowed = vaults.check(vaultId, token, "write");
       if (!allowed.ok) return errorResponse(allowed.status, allowed.error);
-      const body = await readJson(request, MAX_PUSH_BODY_BYTES, budget);
+      const body = await readJson(request, MAX_PUSH_BODY_BYTES, { budget, client: caller });
       if ("error" in body) return errorResponse(body.status, body.error);
       const ops = parseOps(body.value);
       if (!ops) return errorResponse(400, "invalid_ops");
@@ -227,7 +227,7 @@ async function vaultRoute(
   if (sub === "/token" && method === "POST") {
     const allowed = vaults.check(vaultId, token, "owner");
     if (!allowed.ok) return errorResponse(allowed.status, allowed.error);
-    const body = await readJson(request, MAX_ROTATE_BODY_BYTES, budget);
+    const body = await readJson(request, MAX_ROTATE_BODY_BYTES, { budget, client: caller });
     if ("error" in body) return errorResponse(body.status, body.error);
     const { token: next, rekey } = (body.value ?? {}) as { token?: unknown; rekey?: unknown };
     if (!isVaultToken(next)) return errorResponse(400, "invalid_token");
@@ -283,7 +283,7 @@ async function pairingRoute(
   const slot = Number(slotText) as 1 | 2 | 3;
 
   if (method === "PUT") {
-    const read = await readBody(request, MAX_MAILBOX_SLOT_BYTES, budget);
+    const read = await readBody(request, MAX_MAILBOX_SLOT_BYTES, { budget, client: caller });
     if ("error" in read) return errorResponse(read.status, read.error);
     const body = read.bytes;
     if (body.byteLength === 0) return errorResponse(400, "empty_body");

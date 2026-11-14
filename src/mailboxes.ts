@@ -10,7 +10,7 @@
 // which means no interleaving and no half-done burn.
 // Nothing is stored for an ID until a valid first put.
 
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { fail, type Result } from "./http.js";
@@ -75,6 +75,12 @@ export function createMailboxes(db: Db, clock: Clock): Mailboxes {
     if (left > 0) perClient.set(client, left);
     else perClient.delete(client);
   }
+  // The writer is stored as an HMAC under a key that exists only in this process's memory: an
+  // IPv4 address cannot be recovered from the stored value. After a restart the old values match
+  // nobody, so they are cleared at once and those slots count toward the global total only.
+  const hmacKey = randomBytes(32);
+  const clientHash = (clientKey: string): string => createHmac("sha256", hmacKey).update(clientKey).digest("hex");
+  db.prepare("UPDATE mailbox_slots SET client = NULL WHERE client IS NOT NULL").run();
   recount();
 
   /** Erases the mailbox's slots and takes their bytes off the totals. */
@@ -166,9 +172,9 @@ export function createMailboxes(db: Db, clock: Clock): Mailboxes {
   };
 
   return {
-    // Only a hash of the client key is stored: the server keeps no client address at rest.
+    // Only a keyed hash of the client key is stored: the server keeps no client address at rest.
     put: guarded((id, slot, body, clientKey) =>
-      putTx(id, slot, body, createHash("sha256").update(clientKey).digest("hex")),
+      putTx(id, slot, body, clientHash(clientKey)),
     ),
     take: guarded((id, slot) => takeTx(id, slot)),
     burn: guarded((id) => burnTx(id)),

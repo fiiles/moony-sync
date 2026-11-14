@@ -146,6 +146,54 @@ describe("in-flight body budget", () => {
   }, 30_000);
 });
 
+describe("per-client share of the body budget", () => {
+  const login = (t: ReturnType<typeof testApp>, address: string, body: ReadableStream<Uint8Array>) =>
+    t.app.fetch(
+      new Request("http://localhost/admin/api/login", {
+        method: "POST",
+        headers: { origin: "http://localhost", "content-type": "application/json" },
+        body,
+        duplex: "half",
+      } as RequestInit),
+      address,
+    );
+
+  it("one address holding 8 MiB of half-sent bodies gets 503 busy; other addresses are unaffected; the share is released", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const held = Array.from({ length: 512 }, () => heldBody(16 * 1024)); // 512 x 16 KiB = 8 MiB
+    const pending = held.map((h) => login(t, "203.0.113.9", h.body));
+    await new Promise((r) => setTimeout(r, 200));
+    const extra = heldBody(1);
+    const r = await login(t, "203.0.113.9", extra.body);
+    expect(r.status).toBe(503);
+    expect(await r.json()).toEqual({ error: "busy" });
+    // A different address (and a different IPv6 /64) still gets through.
+    const push = (address: string) =>
+      t.call("POST", `/v1/vaults/${v.id}/ops`, {
+        headers: { authorization: `Bearer ${v.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ ops: [{ id: "a".repeat(22), ct: "AAAA" }] }),
+        clientAddress: address,
+      });
+    expect((await push("203.0.113.10")).status).toBe(200);
+    // The same address is refused on the sync API too (the share is per client, not per route).
+    const samePush = await t.app.fetch(
+      new Request(`http://localhost/v1/vaults/${v.id}/ops`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${v.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ ops: [{ id: "b".repeat(22), ct: "AAAA" }] }),
+      }),
+      "203.0.113.9",
+    );
+    expect(samePush.status).toBe(503);
+    // ...and gets its share back once the held bodies abort.
+    for (const h of held) h.end();
+    await Promise.allSettled(pending);
+    const again = await login(t, "203.0.113.9", countingBody(1).body);
+    expect(again.status).not.toBe(503);
+  }, 30_000);
+});
+
 describe("idle body timeout", () => {
   it("a body that delivers no bytes for 30 seconds is aborted with 408 body_timeout", async () => {
     const t = testApp();
