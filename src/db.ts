@@ -100,6 +100,9 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE TABLE backup_codes (code_hash TEXT PRIMARY KEY);
   CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+  // 5: who wrote a pairing slot, as a SHA-256 of the client key (never the address), so one
+  // client's share of the slots can be capped. Cleared when the slot is read or burnt.
+  `ALTER TABLE mailbox_slots ADD COLUMN client TEXT`,
 ];
 
 /** Opens (creating it if needed) the database in `dataDir`, migrates it to the current

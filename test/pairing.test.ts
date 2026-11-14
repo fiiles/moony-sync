@@ -5,6 +5,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { startHousekeeping } from "../src/housekeeping.js";
 import { DAY, MAILBOX_TOMBSTONE_SECONDS, MAILBOX_TTL_SECONDS, MAX_MAILBOX_SLOT_BYTES, MAX_MAILBOX_TOTAL_BYTES } from "../src/limits.js";
+import { createHash } from "node:crypto";
+import { MAX_MAILBOX_CLIENT_BYTES } from "../src/limits.js";
 import { newVaultId, testApp, type TestApp } from "./helpers.js";
 
 const newMailbox = newVaultId; // same format: 22 chars base64url
@@ -285,6 +287,8 @@ describe("pairing mailbox: global byte cap", () => {
     t.db
       .prepare("UPDATE mailbox_slots SET data = zeroblob(?) WHERE mailbox_id = ?")
       .run(MAX_MAILBOX_TOTAL_BYTES - 10, id);
+    t.db.prepare("UPDATE mailbox_slots SET client = NULL WHERE mailbox_id = ?").run(id);
+    t.stores.mailboxes.housekeep(); // recounts the running totals from the table
     const other = newMailbox();
     const r = await put(other, 1, new Uint8Array(11));
     expect(r.status).toBe(503);
@@ -295,5 +299,78 @@ describe("pairing mailbox: global byte cap", () => {
     expect((await put(other, 1, new Uint8Array(10))).status).toBe(204);
     expect((await t.call("GET", `/v1/pairing/${id}/1`)).status).toBe(200);
     expect((await put(newMailbox(), 1, new Uint8Array(1000))).status).toBe(204);
+  });
+});
+
+const keyHash = (address: string): string => createHash("sha256").update(address).digest("hex");
+
+describe("pairing mailbox: one client's share", () => {
+  it("a client holding 8 MiB in open slots gets 503 busy; others and later writes are fine", async () => {
+    const { t } = setup();
+    const from = (address: string, id: string, n: number, slot = 1) =>
+      t.call("PUT", `/v1/pairing/${id}/${slot}`, { body: new Uint8Array(n), clientAddress: address });
+    const a = newMailbox();
+    expect((await from("203.0.113.1", a, 1)).status).toBe(204);
+    t.db
+      .prepare("UPDATE mailbox_slots SET data = zeroblob(?), client = ? WHERE mailbox_id = ?")
+      .run(MAX_MAILBOX_CLIENT_BYTES - 10, keyHash("203.0.113.1"), a);
+    t.stores.mailboxes.housekeep();
+    const b = newMailbox();
+    const over = await from("203.0.113.1", b, 11);
+    expect(over.status).toBe(503);
+    expect(await over.json()).toEqual({ error: "busy" });
+    expect(slotsOf(t, b)).toBe(0);
+    expect((await from("203.0.113.2", b, 11)).status).toBe(204); // another client is unaffected
+    expect((await from("203.0.113.1", newMailbox(), 10)).status).toBe(204); // exact fit
+    // Reading the big slot gives the share back.
+    expect((await t.call("GET", `/v1/pairing/${a}/1`)).status).toBe(200);
+    expect((await from("203.0.113.1", newMailbox(), 1000)).status).toBe(204);
+  });
+
+  it("stores a hash of the client key, never the address, and drops it when the slot is read or burnt", async () => {
+    const { t } = setup();
+    const id = newMailbox();
+    await t.call("PUT", `/v1/pairing/${id}/1`, { body: bytes(1, 2), clientAddress: "198.51.100.77" });
+    await t.call("PUT", `/v1/pairing/${id}/2`, { body: bytes(3), clientAddress: "198.51.100.77" });
+    const rows = () => t.db.prepare("SELECT client FROM mailbox_slots WHERE mailbox_id = ?").all(id) as { client: string | null }[];
+    expect(rows().map((r) => r.client)).toEqual([keyHash("198.51.100.77"), keyHash("198.51.100.77")]);
+    expect(JSON.stringify(rows())).not.toContain("198.51.100.77");
+    await t.call("GET", `/v1/pairing/${id}/1`);
+    expect(rows().map((r) => r.client)).toEqual([null, keyHash("198.51.100.77")]);
+    await t.call("DELETE", `/v1/pairing/${id}`);
+    expect(rows()).toEqual([]);
+  });
+});
+
+describe("pairing mailbox: running totals", () => {
+  it("match the table after put, take, burn and expiry (without a sweep)", async () => {
+    const { t } = setup();
+    const fromTable = () => {
+      const total = (t.db.prepare("SELECT COALESCE(SUM(LENGTH(data)),0) AS n FROM mailbox_slots").get() as { n: number }).n;
+      const per: Record<string, number> = {};
+      for (const r of t.db
+        .prepare("SELECT client, SUM(LENGTH(data)) AS n FROM mailbox_slots WHERE client IS NOT NULL GROUP BY client HAVING n > 0")
+        .all() as { client: string; n: number }[]) per[r.client] = r.n;
+      return { total, perClient: per };
+    };
+    const put = (id: string, slot: number, n: number, address: string) =>
+      t.call("PUT", `/v1/pairing/${id}/${slot}`, { body: new Uint8Array(n).fill(1), clientAddress: address });
+    const [m1, m2, m3] = [newMailbox(), newMailbox(), newMailbox()];
+    await put(m1, 1, 100, "192.0.2.1");
+    await put(m1, 2, 50, "192.0.2.2");
+    await put(m2, 1, 10, "192.0.2.1");
+    await put(m3, 1, 7, "192.0.2.3");
+    expect(t.stores.mailboxes.stats()).toEqual(fromTable());
+    expect(t.stores.mailboxes.stats().total).toBe(167);
+    await t.call("GET", `/v1/pairing/${m1}/1`);
+    expect(t.stores.mailboxes.stats()).toEqual(fromTable());
+    await t.call("DELETE", `/v1/pairing/${m2}`);
+    expect(t.stores.mailboxes.stats()).toEqual(fromTable());
+    t.clock.now += MAILBOX_TTL_SECONDS + 1;
+    await t.call("GET", `/v1/pairing/${m1}/2`); // lazy expiry burns m1 on this call
+    expect(t.stores.mailboxes.stats()).toEqual(fromTable());
+    t.stores.mailboxes.housekeep(); // sweep burns m3
+    expect(t.stores.mailboxes.stats()).toEqual({ total: 0, perClient: {} });
+    expect(fromTable()).toEqual({ total: 0, perClient: {} });
   });
 });

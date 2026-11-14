@@ -287,7 +287,7 @@ async function pairingRoute(
     if ("error" in read) return errorResponse(read.status, read.error);
     const body = read.bytes;
     if (body.byteLength === 0) return errorResponse(400, "empty_body");
-    const r = mailboxes.put(mailboxId, slot, body);
+    const r = mailboxes.put(mailboxId, slot, body, caller);
     return r.ok ? new Response(null, { status: 204 }) : errorResponse(r.status, r.error);
   }
   if (method === "GET") {
