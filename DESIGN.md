@@ -84,9 +84,12 @@ earlier ones are whatever the client sent. That is why exactly one proxy may sta
 
 ### Logging
 
-stdout only: the start-up line, the setup code while no admin exists, housekeeping failures and
-the name of unhandled errors. Never account numbers, tokens, vault or mailbox IDs, or client
-addresses.
+stdout: the start-up line (`moony-sync <version> listening on port <n>`), the setup code while no
+admin exists, `housekeeping: <step> failed` (no IDs), `unhandled error: <error name>` (the name
+only, never the message, which could carry a path), `shutdown: WAL checkpoint failed`, and the
+HTTP library's note that a client aborted a request. A refused start (a bad setting, or a
+database written by a newer server) prints one line to stderr and exits with status 1, without a
+stack trace. Never account numbers, tokens, vault or mailbox IDs, file paths or client addresses.
 
 ### Shutdown
 
@@ -149,7 +152,8 @@ would plug in.
 ### Authentication
 
 - **First run.** With no admin in the database the server prints a setup code to the log at every
-  start and the web interface shows only the setup page: setup code, admin name, password (at
+  start: a new random one each time (or `SETUP_CODE`), except that a code written by `reset-admin`
+  stays valid across restarts until it is used. The web interface shows only the setup page: setup code, admin name, password (at
   least 10, at most 1024 characters). Until setup is done nothing else under `/admin/api`
   answers.
 - **Login.** Name and password. The password is stored as an Argon2id hash. Session cookie
@@ -232,7 +236,10 @@ is not single-use. Revocation is blocking or deleting the person.
 `GET /admin/api/backup` streams a ustar archive: `moony-sync.db` (an SQLite online-backup copy,
 consistent while the server runs, taken into a temporary file in `DATA_DIR` that is removed when
 the download ends, fails or is abandoned, and by the next start) and
-`snapshots/<vault id>/<file>` for every snapshot file, streamed from disk. A single file of 8 GiB
+`snapshots/<vault id>/<file>` for every snapshot file, streamed from disk, with directory entries
+for `snapshots/` and each vault directory. Every entry is owned by uid/gid 1000 (the container's
+`node` user), files are mode 0600 and directories 0700, so extracting as root still gives files the
+container can use. `HEAD` answers the headers without building a copy. A single file of 8 GiB
 or more is refused with an error instead of writing a corrupt header. The archive holds account
 numbers and the second-factor secret in clear: keep it private. Restore is manual: stop the
 server, replace the contents of `DATA_DIR`, start. Restoring an older archive makes every device
@@ -302,7 +309,12 @@ well-formed requests, so malformed IDs and slots (`400`) cost nothing against it
 Once a mailbox has expired or been deleted its ID is **burnt**: every `PUT` and `GET` answers
 `410 mailbox_gone`. A tombstone row (no content) remembers that for 24 hours, then it is dropped
 and the ID is unknown again. A mailbox refuses requests after its 10 minutes even if housekeeping
-has not run yet, and its lifetime is never extended by later writes or reads.
+has not run yet, and its lifetime is never extended by later writes or reads. Slot contents are
+erased by a sweep that runs every 60 seconds, so they exist at most about 11 minutes (10-minute
+expiry plus the sweep); after that only the tombstone remains.
+
+All open slots together may hold 64 MiB; a `PUT` that would pass that answers `503 busy` and
+stores nothing.
 
 ## Sync flow (client view)
 
@@ -320,9 +332,14 @@ has not run yet, and its lifetime is never extended by later writes or reads.
 In-memory fixed windows of one minute, per process (they reset at a restart): account lookups
 (and vault creation, which could probe account numbers) 60/min per client, vault calls 1200/min
 per client and 600/min per vault + token, pairing mailbox calls 120/min per client. Admin guessing
-limits are under *Authentication*. Request bodies are read with a running byte count, so a missing
-or lying `Content-Length` cannot make the server buffer more than the limit; snapshot uploads
-stream to disk.
+limits are under *Authentication*. A client address is keyed as itself (IPv4), as the IPv4 for an
+IPv4-mapped IPv6 address, and by its /64 prefix for any other IPv6 address. Request bodies are
+read with a running byte count, so a missing or lying `Content-Length` cannot make the server
+buffer more than the limit; snapshot uploads stream to disk. A push or token rotation is judged
+by its token (unknown vault, wrong or read-only token, blocked person) **before** its body is
+read. All bodies being buffered at once, on the sync and the admin API together, share 64 MiB
+(each reserves its declared length, at most its route's limit); a request that does not fit
+answers `503 busy` without being read. Snapshot uploads are not counted.
 
 ## Housekeeping
 
@@ -333,7 +350,7 @@ work; every time rule is also enforced at request time.
   previous tokens and rekey bundles older than 30 days, removes snapshot files that have no record
   and are over an hour old (an upload whose request died between the file write and the record).
 - **Mailboxes:** burns open mailboxes past their 10 minutes (deleting the slots) and drops
-  tombstones older than 24 hours.
+  tombstones older than 24 hours. This part also runs on its own every 60 seconds.
 - **Sweep:** finishes pending deletions, and removes snapshot directories of vaults that have no
   record when nothing in them is newer than an hour (an empty directory left by a delete that
   raced an upload, or a restored backup's leftovers).
@@ -360,7 +377,9 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Read grace after a block | 30 days |
 | Vaults per account | 5 |
 | Pairing slot | 1 byte – 64 KiB, write-once, read-once |
-| Pairing mailbox lifetime | 10 minutes (ID burnt 24 h more) |
+| Pairing mailbox lifetime | 10 minutes (ID burnt 24 h more); contents swept within a minute after |
+| Bytes in open pairing slots, all mailboxes | 64 MiB, then `503 busy` |
+| Request bodies buffered at once (sync + admin) | 64 MiB, then `503 busy` |
 | Admin session | 12 hours without use |
 | Admin request body | 16 KiB |
 

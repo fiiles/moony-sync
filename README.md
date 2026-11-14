@@ -47,8 +47,9 @@ DATA_DIR=./data PORT=8787 node dist/main.js
 1. Open `http://<server>:8787` in a browser. Until an admin exists the page shows only the setup
    form.
 2. Enter the **setup code** from the log (`docker compose logs moony-sync`; the line starts with
-   `Setup code:`), a name for the admin and a password of at least 10 characters. The setup code
-   is a new random one at every start while there is no admin, so always read the latest line.
+   `Setup code:`), a name for the admin and a password of at least 10 characters. While there is
+   no admin the server prints a new random code at every start, so always read the latest line.
+   A code written by `reset-admin` is the exception: it stays valid across restarts until used.
 3. The overview asks you to confirm the **address apps use** before you can add anyone. It is
    pre-filled with the address your browser is using right now, which is only right if the apps
    will reach the server the same way (see [https](#https-behind-a-reverse-proxy)). Confirm it or
@@ -154,8 +155,9 @@ host other than `localhost`.
 Admin page, **Backup**, **Download backup**: a `.tar` with a consistent copy of the database and
 all snapshot files. It can be taken while the server runs.
 
-**Keep the archive private.** It holds the account numbers in clear (they are needed to show a
-connection code again), the second factor secret, and everything else the server stores.
+**Keep the archive private.** Besides the encrypted data it holds each person's account number
+(needed to show a connection code again) and the second-factor secret in readable form, plus
+names and password hashes.
 
 To restore:
 
@@ -163,6 +165,7 @@ To restore:
 docker compose down
 # empty ./data, then unpack the archive into it
 tar -xf moony-sync-backup-YYYYMMDD-HHmm.tar -C data
+chown -R 1000:1000 data     # safety line; the archive already says uid/gid 1000
 docker compose up -d
 ```
 
@@ -225,8 +228,28 @@ In `DATA_DIR`: `moony-sync.db` (SQLite, WAL mode, with `-wal` and `-shm` files n
 profile. Housekeeping runs once a day inside the server, and every time rule is also checked on
 each request, so a stopped server misses nothing. Details in [`DESIGN.md`](DESIGN.md).
 
-The log (stdout) contains the start-up line, the setup code while there is no admin, and errors.
-It never contains account numbers, tokens, profile or mailbox IDs, or client addresses.
+The log (stdout) contains the start-up line, the setup code while there is no admin,
+`housekeeping: <step> failed`, `unhandled error: <error name>` (the name only) and
+`shutdown: WAL checkpoint failed`. A start that is refused (a bad setting, or a database from a
+newer server) prints one line to stderr and exits with status 1. The log never contains account
+numbers, tokens, profile or mailbox IDs, file paths or client addresses.
+
+Pairing mailboxes hold their contents for at most about 11 minutes (10-minute expiry plus a sweep
+that runs every minute); after that only a content-free tombstone remains. Limits that answer
+`503 {"error":"busy"}`: all open pairing slots together hold at most 64 MiB, and request bodies
+being buffered at one moment (sync and admin API together; snapshot uploads stream to disk and do
+not count) share 64 MiB. With `TRUST_PROXY=1` the **last** `X-Forwarded-For` entry is the client
+address.
+
+## Known limits
+
+- **No Host allowlist.** A web page that rebinds its DNS name to your server's LAN address can
+  reach the server's unauthenticated routes through a visitor's browser (setup needs the setup
+  code, login is attempt-limited, everything else needs a token). Do not expose a server to
+  the internet without the https proxy, and keep the admin page's address out of untrusted pages.
+- **Disk use can exceed the quota.** A person's 256 MiB op quota counts ciphertext bytes, not
+  the row overhead in the database, so real disk use can be somewhat higher. Snapshot uploads
+  (100 MiB each, 2 kept per profile) are not limited in parallel.
 
 ## Development
 
