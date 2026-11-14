@@ -26,7 +26,14 @@ export function testApp(overrides: Partial<Config> = {}, prepare?: (dataDir: str
   const db = openDb(dataDir);
   const clock = { now: START_TIME };
   const logs: string[] = [];
-  const app = createApp({ config, db, clock: () => clock.now, log: (l) => logs.push(l) });
+  const disk: { free: number | null } = { free: 2 ** 40 };
+  const app = createApp({
+    config,
+    db,
+    clock: () => clock.now,
+    log: (l) => logs.push(l),
+    freeBytes: async () => disk.free,
+  });
   afterAll(() => {
     app.close();
     if (db.open) db.close();
@@ -36,7 +43,24 @@ export function testApp(overrides: Partial<Config> = {}, prepare?: (dataDir: str
     const { clientAddress, ...rest } = init;
     return app.fetch(new Request(`http://localhost${path}`, { method, ...rest }), clientAddress);
   };
-  return { app, db, clock, dataDir, logs, call, stores: app.stores };
+  return { app, db, clock, dataDir, logs, call, stores: app.stores, disk };
+}
+
+export /** A body that counts the chunks the server pulled; each chunk is 64 KiB, `chunks` in all. */
+function countingBody(chunks = 40) {
+  const state = { pulled: 0 };
+  const chunk = new Uint8Array(64 * 1024).fill(0x20);
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (state.pulled >= chunks) return controller.close();
+        state.pulled += 1;
+        controller.enqueue(chunk);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { state, body };
 }
 
 export type TestApp = ReturnType<typeof testApp>;

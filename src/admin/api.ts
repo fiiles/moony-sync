@@ -2,8 +2,7 @@
 // routes to this router, behind the same guard.
 
 import { Hono, type Context } from "hono";
-import { statfs } from "node:fs/promises";
-import type { AppBindings, Deps, Stores } from "../app.js";
+import type { AppBindings, AppDeps, Stores } from "../app.js";
 import { encodeConnectionCode, normalizeServerUrl } from "../connection-code.js";
 import { errorResponse, fromResult, json, readJson, type BodyBudget } from "../http.js";
 import { normalizeName, type Person } from "../people.js";
@@ -32,7 +31,7 @@ function cookieValue(header: string | null): string | null {
   return null;
 }
 
-export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: BodyBudget): Hono<Env> {
+export function adminRoutes(deps: AppDeps, stores: Stores, auth: Auth, budget: BodyBudget): Hono<Env> {
   const { config, db, clock } = deps;
   const router = new Hono<Env>();
 
@@ -209,13 +208,7 @@ export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: Body
     const url = new URL(c.req.url);
     const host = (c.req.header("host") ?? url.host).toLowerCase();
     const hostname = host.replace(/:\d+$/, "");
-    let bytesFree = 0;
-    try {
-      const fs = await statfs(config.dataDir);
-      bytesFree = Number(fs.bavail) * Number(fs.bsize);
-    } catch {
-      /* unknown: report 0 */
-    }
+    const bytesFree = (await deps.freeBytes()) ?? 0; // unknown: report 0
     return json({
       address: address(),
       addressSuggestion: ownOrigin(c),

@@ -7,6 +7,7 @@ import type { Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import { createBodyBudget, errorResponse, json, type BodyBudget } from "./http.js";
+import { diskFreeBytes, type FreeBytes } from "./disk.js";
 import { MAX_INFLIGHT_BODY_BYTES } from "./limits.js";
 import { createMailboxes, type Mailboxes } from "./mailboxes.js";
 import { createPeople, type People } from "./people.js";
@@ -30,7 +31,12 @@ export interface Deps {
   log: (line: string) => void;
   /** The built admin interface; defaults to admin-ui/dist next to the sources. */
   uiDir?: string;
+  /** Free bytes on the data volume; defaults to a statfs of the data directory. */
+  freeBytes?: FreeBytes;
 }
+
+/** Deps after createApp resolved the defaults. */
+export type AppDeps = Deps & { freeBytes: FreeBytes };
 
 /** The storage-backed services, built once and handed to the routers. Later tasks extend it. */
 export interface Stores {
@@ -40,11 +46,13 @@ export interface Stores {
   mailboxes: Mailboxes;
 }
 
-export function createApp(deps: Deps): {
+export function createApp(given: Deps): {
   fetch(req: Request, clientAddress?: string): Promise<Response>;
   close(): void;
   stores: Stores;
 } {
+  const freeBytes = given.freeBytes ?? (() => diskFreeBytes(given.config.dataDir));
+  const deps: AppDeps = { ...given, freeBytes };
   const people = createPeople(deps.db, deps.clock);
   const snapshots = createSnapshots(join(deps.config.dataDir, "snapshots"));
   // An upload that was cut by a crash leaves a ".tmp" file; none of them can still be in flight.

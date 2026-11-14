@@ -56,3 +56,5 @@ export const MAX_INFLIGHT_BODY_CLIENT_BYTES = 8 * 1024 * 1024;
 export const MAX_MAILBOX_CLIENT_BYTES = 8 * 1024 * 1024;
 /** Every stored op is charged its ciphertext plus this much against the vault's op quota. */
 export const OP_OVERHEAD_BYTES = 128;
+/** Uploads are refused (507 server_full) when they would leave less than this free on the data volume. */
+export const FREE_SPACE_FLOOR_BYTES = 1024 ** 3;

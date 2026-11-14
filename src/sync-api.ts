@@ -1,7 +1,8 @@
 // The /v1 routes of the sync protocol: accounts, vaults and pairing mailboxes.
 
 import { Hono, type Context } from "hono";
-import type { AppBindings, Deps, Stores } from "./app.js";
+import type { AppBindings, AppDeps, Stores } from "./app.js";
+import { hasRoom, type FreeBytes } from "./disk.js";
 import {
   base64DecodedLength,
   decodeBase64,
@@ -31,8 +32,9 @@ import type { IncomingOp } from "./vaults.js";
 
 type Env = { Bindings: AppBindings };
 
-export function syncRoutes(deps: Deps, stores: Stores, limiters: Limiters, budget: BodyBudget): Hono<Env> {
+export function syncRoutes(deps: AppDeps, stores: Stores, limiters: Limiters, budget: BodyBudget): Hono<Env> {
   const r = new Hono<Env>();
+  const rd: RouteDeps = { stores, limiters, budget, freeBytes: deps.freeBytes };
   const callerOf = (c: Context<Env>): string =>
     clientKey(c.req.raw, c.env.clientAddress, deps.config.trustProxy);
 
@@ -65,7 +67,7 @@ export function syncRoutes(deps: Deps, stores: Stores, limiters: Limiters, budge
     });
   });
 
-  r.all("/vaults/*", (c) => vaultRoute(c.req.raw, stores, limiters, budget, callerOf(c)));
+  r.all("/vaults/*", (c) => vaultRoute(c.req.raw, rd, callerOf(c)));
 
   // Pairing needs no credentials: slot contents are public keys or sealed blobs and the ID is
   // random, so it is limited per client address only.
@@ -107,13 +109,15 @@ function parseOps(value: unknown): IncomingOp[] | null {
   return out;
 }
 
-async function vaultRoute(
-  request: Request,
-  stores: Stores,
-  limiters: Limiters,
-  budget: BodyBudget,
-  caller: string,
-): Promise<Response> {
+interface RouteDeps {
+  stores: Stores;
+  limiters: Limiters;
+  budget: BodyBudget;
+  freeBytes: FreeBytes;
+}
+
+async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Promise<Response> {
+  const { stores, limiters, budget } = rd;
   const url = new URL(request.url);
   const match = VAULT_PATH.exec(url.pathname);
   if (!match) return errorResponse(404, "not_found");
@@ -183,6 +187,7 @@ async function vaultRoute(
 
       const auth = await vaults.authorizeSnapshot(vaultId, token, seq);
       if (!auth.ok) return errorResponse(auth.status, auth.error);
+      if (!hasRoom(await rd.freeBytes(), length)) return errorResponse(507, "server_full");
       // The declared length is also the cap: a body that runs past it is refused as it streams.
       let written;
       try {
