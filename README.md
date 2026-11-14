@@ -83,6 +83,10 @@ and can still read for 30 days; nothing is deleted; unblocking lets them continu
 (removes the person and all their data on the server; their devices will report that the synced
 data were deleted), and delete a single profile from the person's detail page.
 
+Each profile may store 10 GiB of documents and photos by default. Settings, **Space for documents
+and photos**, changes the limit for the whole server; a lower limit keeps the files already stored
+and makes new ones wait until there is room.
+
 ## https behind a reverse proxy
 
 Moony accepts plain `http://` for your own server but warns about it (see below). For anything

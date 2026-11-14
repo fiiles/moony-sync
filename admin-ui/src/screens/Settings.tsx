@@ -47,6 +47,53 @@ function AddressCard() {
   );
 }
 
+const GIB = 1024 ** 3;
+const MAX_QUOTA_GIB = 1_048_576;
+
+function QuotaCard() {
+  const { t } = useI18n();
+  const res = useResource(() => api.settings());
+  const { busy, error, run } = useAction();
+  const [value, setValue] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const s = res.data;
+  if (!s) return res.error ? <LoadError message={errorMessage(t, res.error)} onRetry={res.reload} /> : <div class="skeleton skeleton--card" />;
+  const current = value ?? String(s.blobQuotaBytes / GIB);
+  return (
+    <form
+      class="card card--flat"
+      noValidate
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setSaved(false);
+        const text = current.trim();
+        if (!/^\d{1,7}$/.test(text) || Number(text) > MAX_QUOTA_GIB) {
+          setInvalid(true);
+          return;
+        }
+        setInvalid(false);
+        const r = await run(() => api.saveBlobQuota(Number(text) * GIB));
+        if (r.ok) {
+          setValue(String(r.value.blobQuotaBytes / GIB));
+          setSaved(true);
+        }
+      }}
+    >
+      <div class="card__body">
+        <h2 class="card__title">{t("settings.quotaTitle")}</h2>
+        <p class="card__sub card__sub--text">{t("settings.quotaText")}</p>
+        <Field label={t("settings.quotaLabel")} value={current} onValue={(v) => { setValue(v); setSaved(false); setInvalid(false); }} mono inputMode="numeric" autocapitalize="off" spellcheck={false} invalid={invalid} required />
+        <ErrorNote error={invalid ? null : error} extra={invalid ? t("err.invalid_quota") : null} />
+        {saved ? <p class="ok-note" role="status">{t("settings.quotaSaved")}</p> : null}
+        <button type="submit" class="btn" disabled={busy}>
+          {t("settings.quotaSave")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function PasswordCard() {
   const { t } = useI18n();
   const { state } = useApp();
@@ -232,6 +279,7 @@ export function Settings() {
       <PageHead eyebrow={t("settings.eyebrow")} title={t("settings.title")} lead={t("settings.lead")} />
       <div class="settings-stack">
         <AddressCard />
+        <QuotaCard />
         <PasswordCard />
         <TwoFactorCard />
         <LogoutAllCard />
