@@ -23,6 +23,7 @@ describe("app shell", () => {
       version: "9.9.9",
       protocol: 2,
       mode: "self_hosted",
+      features: ["blobs"],
     });
   });
 

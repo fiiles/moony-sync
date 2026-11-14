@@ -5,7 +5,14 @@
 import { hasRoom } from "./disk.js";
 import { BodyIdleError, BodyStreamError } from "./files.js";
 import { errorResponse, json } from "./http.js";
-import { IDLE_BODY_SECONDS, MAX_BLOB_BYTES, MAX_BLOB_UPLOADS_PER_VAULT } from "./limits.js";
+import {
+  DEFAULT_BLOB_LIST_LIMIT,
+  IDLE_BODY_SECONDS,
+  MAX_BLOB_BYTES,
+  MAX_BLOB_LIST_LIMIT,
+  MAX_BLOB_UPLOADS_PER_VAULT,
+} from "./limits.js";
+import { isBlobId } from "./encoding.js";
 import type { RouteDeps } from "./sync-api.js";
 
 /** An error answer of a blob route: the usual JSON body plus the code in a header, so a client
@@ -44,14 +51,26 @@ export function createUploadGate(perVault: number = MAX_BLOB_UPLOADS_PER_VAULT):
 export async function blobRoute(
   rd: RouteDeps,
   request: Request,
-  _url: URL,
+  url: URL,
   vaultId: string,
   blobId: string | null,
   token: string,
 ): Promise<Response> {
-  if (blobId === null) return blobError(405, "method_not_allowed");
   const { blobs, blobFiles: files } = rd.stores;
   const method = request.method;
+
+  if (blobId === null) {
+    if (method !== "GET") return blobError(405, "method_not_allowed");
+    const after = url.searchParams.get("after");
+    if (after !== null && !isBlobId(after)) return blobError(400, "invalid_blob_id");
+    const raw = url.searchParams.get("limit");
+    const asked = raw !== null && /^[0-9]{1,15}$/.test(raw) ? Number(raw) : DEFAULT_BLOB_LIST_LIMIT;
+    const limit = Math.min(asked, MAX_BLOB_LIST_LIMIT);
+    if (limit < 1) return blobError(400, "invalid_limit");
+    const r = blobs.list(vaultId, token, after, limit);
+    if (!r.ok) return blobError(r.status, r.error);
+    return json({ blobs: r.blobs, more: r.more });
+  }
 
   if (method === "PUT") {
     // The token and the entitlement are judged before a body byte is read; an existing blob
@@ -94,6 +113,12 @@ export async function blobRoute(
     const file = files.open(vaultId, blobId);
     if (!file) return blobError(404, "blob_not_found");
     return new Response(file.stream, { headers: contentHeaders(file.size) });
+  }
+
+  if (method === "DELETE") {
+    const r = blobs.remove(vaultId, token, blobId);
+    if (!r.ok) return blobError(r.status, r.error);
+    return new Response(null, { status: 204 });
   }
 
   return blobError(405, "method_not_allowed");

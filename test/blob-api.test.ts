@@ -3,6 +3,7 @@
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { setBlobQuotaBytes } from "../src/blobs.js";
 import { FREE_SPACE_FLOOR_BYTES, MAX_BLOB_BYTES } from "../src/limits.js";
 import {
   auth,
@@ -220,6 +221,15 @@ describe("path safety", () => {
     const v = await newVault(t);
     const res = await t.call("GET", `${blobUrl(v, newBlobId())}/x`, { headers: auth(v) });
     expect([res.status, await res.json()]).toEqual([404, { error: "not_found" }]);
+    expect(res.headers.get("moony-error")).toBe("not_found");
+  });
+
+  it("a trailing slash after /blobs is 404 not_found with the Moony-Error header", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const res = await t.call("GET", `/v1/vaults/${v.id}/blobs/`, { headers: auth(v) });
+    expect([res.status, await res.json()]).toEqual([404, { error: "not_found" }]);
+    expect(res.headers.get("moony-error")).toBe("not_found");
   });
 });
 
@@ -393,5 +403,135 @@ describe("races", () => {
     expect([res.status, await res.json()]).toEqual([403, { error: "token_read_only" }]);
     expect(blobFiles(t, v)).toEqual([]);
     expect(rows(t)).toBe(0);
+  });
+});
+
+const listUrl = (v: { id: string }, query = ""): string => `/v1/vaults/${v.id}/blobs${query}`;
+const list = (t: TestApp, v: Vault, query = "") => t.call("GET", listUrl(v, query), { headers: auth(v) });
+
+describe("list", () => {
+  it("pages by id: limit, after (exclusive), more; entries are id, size, createdAt", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const ids = Array.from({ length: 5 }, newBlobId).sort();
+    const entries = [];
+    for (const [i, id] of ids.entries()) {
+      t.clock.now += 10;
+      expect((await uploadBlob(t, v, id, "x".repeat(i + 1))).status).toBe(201);
+      entries.push({ id, size: i + 1, createdAt: t.clock.now });
+    }
+    expect(await (await list(t, v, "?limit=2")).json()).toEqual({ blobs: entries.slice(0, 2), more: true });
+    expect(await (await list(t, v, `?after=${ids[1]}&limit=2`)).json()).toEqual({
+      blobs: entries.slice(2, 4),
+      more: true,
+    });
+    expect(await (await list(t, v, `?after=${ids[3]}`)).json()).toEqual({ blobs: [entries[4]], more: false });
+  });
+
+  it("defaults and bounds: no params lists all; limit=0 is 400 invalid_limit; limit=5000 clamps; bad after is 400 invalid_blob_id", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    for (let i = 0; i < 3; i++) await uploadBlob(t, v, newBlobId(), "a");
+    expect(((await (await list(t, v)).json()) as { blobs: unknown[] }).blobs).toHaveLength(3);
+    const zero = await list(t, v, "?limit=0");
+    expect([zero.status, await zero.json()]).toEqual([400, { error: "invalid_limit" }]);
+    expect(zero.headers.get("moony-error")).toBe("invalid_limit");
+    const big = await list(t, v, "?limit=5000");
+    expect([big.status, ((await big.json()) as { more: boolean }).more]).toEqual([200, false]);
+    expect(((await (await list(t, v, "?limit=abc")).json()) as { blobs: unknown[] }).blobs).toHaveLength(3);
+    for (const after of ["nope", "0F8FAD5B-D9CB-469F-A165-70867728950E", ""]) {
+      const bad = await list(t, v, `?after=${after}`);
+      expect([bad.status, await bad.json()]).toEqual([400, { error: "invalid_blob_id" }]);
+      expect(bad.headers.get("moony-error")).toBe("invalid_blob_id");
+    }
+  });
+
+  it("an empty vault lists nothing; another vault's blobs are never listed; a previous token can list", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const other = await newVault(t);
+    expect(await (await list(t, v)).json()).toEqual({ blobs: [], more: false });
+    const id = newBlobId();
+    await uploadBlob(t, other, id, "other");
+    expect(await (await list(t, v)).json()).toEqual({ blobs: [], more: false });
+    await uploadBlob(t, v, id, "mine");
+    await rotate(t, v);
+    const res = await list(t, v);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { blobs: { id: string }[] }).blobs.map((b) => b.id)).toEqual([id]);
+  });
+});
+
+describe("delete", () => {
+  const del = (t: TestApp, v: Vault, id: string, token = v.token) =>
+    t.call("DELETE", blobUrl(v, id), { headers: { authorization: `Bearer ${token}` } });
+
+  it("current token: 204, then GET 404 blob_not_found, file and record gone; a second DELETE is 204 too", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const id = newBlobId();
+    await uploadBlob(t, v, id, "content");
+    expect(blobFiles(t, v)).toEqual([id]);
+    expect((await del(t, v, id)).status).toBe(204);
+    const res = await get(t, v, id);
+    expect([res.status, await res.json()]).toEqual([404, { error: "blob_not_found" }]);
+    expect(blobFiles(t, v)).toEqual([]);
+    expect(rows(t)).toBe(0);
+    expect((await del(t, v, id)).status).toBe(204);
+  });
+
+  it("a previous token is 403 token_read_only; a wrong token 401; an unknown vault 404 vault_not_found; a bad id 400", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const id = newBlobId();
+    await uploadBlob(t, v, id, "content");
+    const rotated = await rotate(t, v);
+    const old = await del(t, v, id);
+    expect([old.status, await old.json()]).toEqual([403, { error: "token_read_only" }]);
+    expect(old.headers.get("moony-error")).toBe("token_read_only");
+    expect((await del(t, rotated, id, newToken())).status).toBe(401);
+    const unknown = await del(t, { ...v, id: newVaultId() }, id);
+    expect([unknown.status, await unknown.json()]).toEqual([404, { error: "vault_not_found" }]);
+    expect((await del(t, rotated, "not-a-uuid")).status).toBe(400);
+    expect(rows(t)).toBe(1);
+    expect(blobFiles(t, v)).toEqual([id]);
+  });
+
+  it("delete then upload of the same id is 201 created:true", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const id = newBlobId();
+    await uploadBlob(t, v, id, "one");
+    await del(t, v, id);
+    const again = await uploadBlob(t, v, id, "two");
+    expect([again.status, await again.json()]).toEqual([201, { created: true }]);
+    expect(await (await get(t, v, id)).text()).toBe("two");
+  });
+
+  it("a blocked person past the grace: GET, HEAD and list are 402, DELETE is 204", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const id = newBlobId();
+    await uploadBlob(t, v, id, "content");
+    t.stores.people.setState(t.stores.people.byAccount(v.account)!.id, "blocked");
+    t.clock.now += 31 * 86_400;
+    expect((await get(t, v, id)).status).toBe(402);
+    expect((await get(t, v, id, "HEAD")).status).toBe(402);
+    expect((await list(t, v)).status).toBe(402);
+    expect((await del(t, v, id)).status).toBe(204);
+    expect(rows(t)).toBe(0);
+  });
+
+  it("frees quota: with the quota lowered below use, deleting makes room again", async () => {
+    const t = testApp();
+    setBlobQuotaBytes(t.db, 1000);
+    const v = await newVault(t);
+    const big = newBlobId();
+    expect((await uploadBlob(t, v, big, fill(600))).status).toBe(201);
+    setBlobQuotaBytes(t.db, 500);
+    const refused = await uploadBlob(t, v, newBlobId(), fill(100));
+    expect([refused.status, await refused.json()]).toEqual([413, { error: "quota_exceeded" }]);
+    expect((await del(t, v, big)).status).toBe(204);
+    expect((await uploadBlob(t, v, newBlobId(), fill(100))).status).toBe(201);
   });
 });

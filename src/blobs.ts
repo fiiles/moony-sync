@@ -28,7 +28,8 @@ export function setBlobQuotaBytes(db: Db, bytes: number): void {
 export type BlobRecord = { id: string; size: number; createdAt: number };
 
 export interface Blobs {
-  /** Side-effect free, before any body byte: vaults.check(write), then whether the record exists. */
+  /** Before any body byte: vaults.check(write), then whether the record exists. Only an existing
+   *  blob marks vault activity (the request is then answered without a commit); a new one does not. */
   check(vaultId: string, token: string, blobId: string): Result<{ exists: boolean }>;
   /** One transaction: vaults.authorize(write); record exists → { created: false } (publish NOT
    *  called); else publish() (the rename) and insert (vault_id, blob_id, size, clock()). A throw
@@ -44,12 +45,27 @@ export interface Blobs {
   fits(vaultId: string, size: number): boolean;
   /** vaults.authorize(read), then the record; 404 blob_not_found without one. */
   find(vaultId: string, token: string, blobId: string): Result<{ size: number; createdAt: number }>;
+  /** vaults.authorize(read); blobs with id > `after` (null = from the start) in id order, at most
+   *  `limit`; `more` says whether another page follows. */
+  list(
+    vaultId: string,
+    token: string,
+    after: string | null,
+    limit: number,
+  ): Result<{ blobs: BlobRecord[]; more: boolean }>;
+  /** vaults.authorize(owner): deletes the record, then the file. Ok whether or not a record
+   *  existed; a file that cannot be removed is left as an orphan for housekeeping. */
+  remove(vaultId: string, token: string, blobId: string): Result;
 }
 
-export function createBlobs(db: Db, clock: Clock, vaults: Vaults, _files: BlobFiles): Blobs {
+export function createBlobs(db: Db, clock: Clock, vaults: Vaults, files: BlobFiles): Blobs {
   const q = {
     one: db.prepare("SELECT size, created_at FROM blobs WHERE vault_id = ? AND blob_id = ?"),
     used: db.prepare("SELECT COALESCE(SUM(size), 0) AS n FROM blobs WHERE vault_id = ?"),
+    page: db.prepare(
+      "SELECT blob_id, size, created_at FROM blobs WHERE vault_id = ? AND blob_id > ? ORDER BY blob_id LIMIT ?",
+    ),
+    delete: db.prepare("DELETE FROM blobs WHERE vault_id = ? AND blob_id = ?"),
     insert: db.prepare(
       "INSERT INTO blobs (vault_id, blob_id, size, created_at) VALUES (?, ?, ?, ?)",
     ),
@@ -98,6 +114,32 @@ export function createBlobs(db: Db, clock: Clock, vaults: Vaults, _files: BlobFi
       if (!auth.ok) return auth;
       const r = row(vaultId, blobId);
       return r ? { ok: true, size: r.size, createdAt: r.created_at } : fail(404, "blob_not_found");
+    },
+
+    list(vaultId, token, after, limit) {
+      const auth = vaults.authorize(vaultId, token, "read");
+      if (!auth.ok) return auth;
+      const found = q.page.all(vaultId, after ?? "", limit + 1) as {
+        blob_id: string;
+        size: number;
+        created_at: number;
+      }[];
+      const blobs = found
+        .slice(0, limit)
+        .map((r) => ({ id: r.blob_id, size: r.size, createdAt: r.created_at }));
+      return { ok: true, blobs, more: found.length > limit };
+    },
+
+    remove(vaultId, token, blobId) {
+      const auth = vaults.authorize(vaultId, token, "owner");
+      if (!auth.ok) return auth;
+      q.delete.run(vaultId, blobId);
+      try {
+        files.remove(vaultId, blobId);
+      } catch {
+        // The record is gone, so the blob no longer exists; housekeeping sweeps the orphan file.
+      }
+      return { ok: true };
     },
   };
 }

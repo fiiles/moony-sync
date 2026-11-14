@@ -253,7 +253,7 @@ The sync API is the v1.1 API (below) with these differences from the hosted rela
 
 | Change | Detail |
 |---|---|
-| `GET /v1/server` | No auth. → `{"name": "moony-sync", "version": "<semver>", "protocol": 2, "mode": "self_hosted"}`. The app uses it to confirm an address is a Moony sync server. Rate-limited like account lookups. |
+| `GET /v1/server` | No auth. → `{"name": "moony-sync", "version": "<semver>", "protocol": 2, "mode": "self_hosted", "features": ["blobs"]}`. The app uses it to confirm an address is a Moony sync server. `features` lists optional capabilities (here the blob endpoints); the protocol stays 2, and a server without the field has no features. Rate-limited like account lookups. |
 | `POST /v1/accounts` | `403 registration_closed`. |
 | `POST /v1/accounts/me/checkout` | `409 self_hosted` (so older app builds keep working); `400 missing_account` without the header. |
 | `DELETE /v1/accounts/me` | `403 managed_by_operator`: the admin owns the person record. |
@@ -308,6 +308,8 @@ written once.
 | `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes, `413 quota_exceeded` when the vault's blobs plus this one would pass its quota, `429 too_many_uploads` when two uploads of the vault are already running). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
 | `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current or previous token, also in the read grace. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
 | `GET` | `/v1/vaults/:vaultId/blobs/:blobId` | The same access as `HEAD`. Raw bytes, `Content-Length`, `Moony-Blob-Size`; `404 blob_not_found` (also for a record whose file is gone). |
+| `GET` | `/v1/vaults/:vaultId/blobs` | The same access as `HEAD`. Query `after` (a blob ID, exclusive; `400 invalid_blob_id` when malformed) and `limit` (default 500, at most 1000; `400 invalid_limit` below 1). → `{"blobs": [{"id", "size", "createdAt"}], "more": bool}` in ID order; `more` says another page follows. |
+| `DELETE` | `/v1/vaults/:vaultId/blobs/:blobId` | Current token only (`403 token_read_only` for a previous one), and also for a person who is blocked: deleting is never refused for payment. → `204`, whether or not the blob existed. Frees its quota. Used by the devices' daily clean-up and by nothing else. |
 
 Order of checks for `PUT`: token and entitlement come first, before a single body byte is read;
 an existing blob answers `200` without the body; then the length, the quota, the free space, the
@@ -451,5 +453,4 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 - Server-side per-device keys. Device revocation is token rotation plus rekey bundles the
   clients build and seal to each other's keys; the server stores the bundles as opaque bytes.
 - WebSocket push (clients poll).
-- Blob (attachment) endpoints.
 - A built-in HTTPS listener or certificates; use a reverse proxy.

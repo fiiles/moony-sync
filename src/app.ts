@@ -20,6 +20,8 @@ import { syncRoutes } from "./sync-api.js";
 import { createStaticHandler, DEFAULT_UI_DIR } from "./static.js";
 
 export const PROTOCOL = 2;
+/** Optional capabilities of this server; a server without the field has none. */
+export const FEATURES = ["blobs"] as const;
 
 /** Hono env: the peer socket address, for routes that rate-limit or log by client. */
 export interface AppBindings {
@@ -86,6 +88,7 @@ export function createApp(given: Deps): {
       name: "moony-sync",
       version: deps.config.version,
       protocol: PROTOCOL,
+      features: FEATURES,
       mode: "self_hosted",
     });
   });

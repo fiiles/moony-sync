@@ -123,7 +123,11 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
   const { stores, limiters, budget } = rd;
   const url = new URL(request.url);
   const match = VAULT_PATH.exec(url.pathname);
-  if (!match) return errorResponse(404, "not_found");
+  if (!match) {
+    // Blob paths answer every error with the Moony-Error header, an unknown shape included.
+    const blobShaped = /^\/v1\/vaults\/[^/]+\/blobs\//.test(url.pathname);
+    return blobShaped ? blobError(404, "not_found") : errorResponse(404, "not_found");
+  }
   const vaultId = match[1]!;
   const sub = match[2] ?? "";
   // Blob paths answer every error with the Moony-Error header as well.

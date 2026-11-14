@@ -1,8 +1,8 @@
 # Moony sync server
 
 A small server you run yourself, so your Moony devices can keep their data in sync without any
-cloud service in between. It stores and forwards **encrypted** change records and encrypted
-snapshots. It cannot read them: the keys never leave your devices.
+cloud service in between. It stores and forwards **encrypted** change records, encrypted
+snapshots, and the apps' encrypted documents and photos. It cannot read them: the keys never leave your devices.
 
 - One Node process, one folder of data (a SQLite database and snapshot files).
 - A web page to add the people who may use it, block them, delete them and download a backup.
