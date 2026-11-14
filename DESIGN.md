@@ -144,7 +144,7 @@ would plug in.
 - **Blocking never deletes.** There is no retention deletion by age: data goes when the admin
   deletes the person or a profile, or the app deletes its vault. After the 30 days, reads of a
   blocked person answer as for any lapsed account until the person is unblocked.
-- **Deleting a person** removes the person, all their vault rows and then their snapshot files, in
+- **Deleting a person** removes the person, all their vault rows and then their snapshot and blob files, in
   one step from the callers' point of view: from the commit on, vault calls answer
   `404 vault_not_found` (the app shows "the synced data were deleted") and the connection code
   answers `404 account_not_found`.
@@ -204,7 +204,7 @@ numbers never appear in answers, except inside a connection code.
 | `GET` | `/admin/api/people/:id` | The person plus `vaults: [{id, shortId, bytes, lastActivity}]` |
 | `PATCH` | `/admin/api/people/:id` | Exactly one of `{name}` (`400 invalid_name`, also for a non-string) or `{state: "active" \| "blocked"}` |
 | `POST` | `/admin/api/people/:id/connection-code` | `{password}` → `{connectionCode}`; the same password check and attempt limit as login |
-| `DELETE` | `/admin/api/people/:id` | `204`; removes the person, their vaults and snapshot files |
+| `DELETE` | `/admin/api/people/:id` | `204`; removes the person, their vaults and their snapshot and blob files |
 | `DELETE` | `/admin/api/people/:id/vaults/:vaultId` | `204`; removes one profile of that person |
 | `GET` | `/admin/api/settings` | `{publicUrl}` (the saved address or `null`) |
 | `PUT` | `/admin/api/settings` | `{publicUrl: string \| null}` → the normalised value; `400 invalid_address` |
@@ -288,7 +288,7 @@ Headers: `Moony-Account: <account number>` for account calls and vault creation;
 | `GET` | `/v1/vaults/:vaultId/snapshot` | Raw bytes; `Moony-Snapshot-Seq` header. `404 no_snapshot` when none. |
 | `POST` | `/v1/vaults/:vaultId/token` | Rotate. Body `{"token": "<new 43-char token>", "rekey": "<base64, ≤ 256 KiB decoded>"}`. The **current** token authorises; no entitlement needed. One transaction: the current token's hash becomes a previous token (read-only for 30 days), the new hash becomes current, the bundle is stored with the next rotation number (1, 2, …), the vault head at that moment and the time. → `200 {"rotation": n, "head": h}`. A previous token gets `403 token_read_only` (so of two concurrent rotations the second fails); a wrong token `401 unauthorized`; a malformed or already-used new token `400 invalid_token`; a missing or malformed bundle `400 invalid_rekey`; a bundle over 256 KiB `413 rekey_too_large`; a vault already holding 32 bundles `409 too_many_rotations` (housekeeping frees slots). |
 | `GET` | `/v1/vaults/:vaultId/rekey?after=<n>&limit=<k>` | Current or previous token. → `{"rekeys": [{"rotation", "head", "at", "rekey"}], "more": bool}` for rotations greater than `n` (default 0), oldest first; `limit` default 8, max 32, page cut at ~4 MiB of bundles (`more` says to ask again with the last `rotation`). Bundles older than 30 days are gone. |
-| `DELETE` | `/v1/vaults/:vaultId` | Current token only. Wipes ops, snapshots and the vault record; frees the account slot. |
+| `DELETE` | `/v1/vaults/:vaultId` | Current token only. Wipes ops, snapshots, blobs and the vault record; frees the account slot. |
 
 A previous token may `GET` the vault, pull ops, fetch the snapshot and fetch rekey bundles; every
 other call gets `403 {"error": "token_read_only"}`. Thirty days after the rotation that retired it
@@ -308,7 +308,7 @@ written once.
 | `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes, `413 quota_exceeded` when the vault's blobs plus this one would pass its quota, `429 too_many_uploads` when two uploads of the vault are already running). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
 | `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current or previous token, also in the read grace. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
 | `GET` | `/v1/vaults/:vaultId/blobs/:blobId` | The same access as `HEAD`. Raw bytes, `Content-Length`, `Moony-Blob-Size`; `404 blob_not_found` (also for a record whose file is gone). |
-| `GET` | `/v1/vaults/:vaultId/blobs` | The same access as `HEAD`. Query `after` (a blob ID, exclusive; `400 invalid_blob_id` when malformed) and `limit` (default 500, at most 1000; `400 invalid_limit` below 1). → `{"blobs": [{"id", "size", "createdAt"}], "more": bool}` in ID order; `more` says another page follows. |
+| `GET` | `/v1/vaults/:vaultId/blobs` | The same access as `HEAD`. Query `after` (a blob ID, exclusive; `400 invalid_blob_id` when malformed) and `limit` (default 500, at most 1000; `400 invalid_limit` below 1). → `{"blobs": [{"id", "size", "createdAt"}], "more": bool, "now": <unix seconds>}` in ID order; `more` says another page follows. `now` is the server's clock, so a device can measure a blob's age (`now - createdAt`) on the same clock that stamped `createdAt`. |
 | `DELETE` | `/v1/vaults/:vaultId/blobs/:blobId` | Current token only (`403 token_read_only` for a previous one), and also for a person who is blocked: deleting is never refused for payment. → `204`, whether or not the blob existed. Frees its quota. Used by the devices' daily clean-up and by nothing else. |
 
 Order of checks for `PUT`: token and entitlement come first, before a single body byte is read;
@@ -384,18 +384,20 @@ work; every time rule is also enforced at request time.
 
 - **Per vault:** prunes ops covered by a snapshot and older than 30 days (`floor` rises), forgets
   previous tokens and rekey bundles older than 30 days, removes snapshot files that have no record
-  and are over an hour old (an upload whose request died between the file write and the record).
+  and are over an hour old (an upload whose request died between the file write and the record),
+  does the same for blob files without a record, and drops blob records whose file is gone (so the
+  devices upload that blob again).
 - **Mailboxes:** burns open mailboxes past their 10 minutes (deleting the slots) and drops
   tombstones older than 24 hours. This part also runs on its own every 60 seconds.
 - **Sweep:** finishes pending deletions, and removes snapshot directories of vaults that have no
   record when nothing in them is newer than an hour (an empty directory left by a delete that
-  raced an upload, or a restored backup's leftovers).
-- **At start:** removes unfinished uploads (`*.tmp` in the snapshot directories) and leftover
+  raced an upload, or a restored backup's leftovers); blob directories likewise.
+- **At start:** removes unfinished uploads (`*.tmp` in the snapshot and blob directories) and leftover
   backup copies (`.backup-*.tmp` in `DATA_DIR`).
 
 Deleting a vault is one transaction that drops its rows and notes a `pending_wipes` entry; from
 then on every call answers `vault_not_found`, and creating the same ID answers
-`409 vault_deleting`. Its files are removed right after; if that fails, the next sweep finishes
+`409 vault_deleting`. Its snapshot and blob files are removed right after; if that fails, the next sweep finishes
 it. An upload that finishes after the vault is gone is refused and its file removed.
 
 ## Limits

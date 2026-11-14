@@ -26,7 +26,7 @@ import {
 const ops = (prefix: string, n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `${prefix}${i}`, ct: b64(`${prefix}-cipher-${i}`) }));
 
-const VAULT_TABLES = ["vaults", "ops", "prev_tokens", "rekeys", "snapshots", "pending_wipes"];
+const VAULT_TABLES = ["vaults", "ops", "prev_tokens", "rekeys", "snapshots", "blobs", "pending_wipes"];
 const rowCount = (t: TestApp, table: string): number =>
   (t.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
 const putVault = (t: TestApp, account: string, id: string, token = newToken()) =>

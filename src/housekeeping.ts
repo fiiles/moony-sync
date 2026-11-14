@@ -6,7 +6,7 @@ import { HOUSEKEEPING_INTERVAL_SECONDS, MAILBOX_SWEEP_INTERVAL_SECONDS } from ".
 
 export function startHousekeeping(
   deps: Pick<Deps, "log">,
-  stores: Pick<Stores, "vaults" | "mailboxes">,
+  stores: Pick<Stores, "vaults" | "mailboxes" | "blobs">,
   intervalSeconds: number = HOUSEKEEPING_INTERVAL_SECONDS,
 ): { runOnce(): void; stop(): void } {
   // One failing step must not stop the others; log lines carry no IDs.
@@ -23,9 +23,13 @@ export function startHousekeeping(
     attempt("listing vaults", () => {
       ids = stores.vaults.listIds();
     });
-    for (const id of ids) attempt("vault", () => stores.vaults.housekeep(id));
+    for (const id of ids) {
+      attempt("vault", () => stores.vaults.housekeep(id));
+      attempt("blobs", () => stores.blobs.housekeep(id));
+    }
     attempt("mailboxes", () => stores.mailboxes.housekeep());
     attempt("sweep", () => stores.vaults.sweep());
+    attempt("blob sweep", () => stores.blobs.sweep());
   }
 
   runOnce();

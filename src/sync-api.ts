@@ -3,6 +3,7 @@
 import { Hono, type Context } from "hono";
 import type { AppBindings, AppDeps, Stores } from "./app.js";
 import { blobError, blobRoute, createUploadGate, type UploadGate } from "./blob-api.js";
+import type { Clock } from "./clock.js";
 import { hasRoom, type FreeBytes } from "./disk.js";
 import {
   base64DecodedLength,
@@ -36,7 +37,7 @@ type Env = { Bindings: AppBindings };
 
 export function syncRoutes(deps: AppDeps, stores: Stores, limiters: Limiters, budget: BodyBudget): Hono<Env> {
   const r = new Hono<Env>();
-  const rd: RouteDeps = { stores, limiters, budget, freeBytes: deps.freeBytes, uploads: createUploadGate() };
+  const rd: RouteDeps = { stores, limiters, budget, freeBytes: deps.freeBytes, uploads: createUploadGate(), clock: deps.clock };
   const callerOf = (c: Context<Env>): string =>
     clientKey(c.req.raw, c.env.clientAddress, deps.config.trustProxy);
 
@@ -89,7 +90,7 @@ function bearer(request: Request): string | null {
   return m && isVaultToken(m[1]) ? m[1] : null;
 }
 
-function intParam(url: URL, name: string): number | null {
+export function intParam(url: URL, name: string): number | null {
   const v = url.searchParams.get(name);
   if (v === null || !/^[0-9]{1,15}$/.test(v)) return null;
   return Number(v);
@@ -117,6 +118,7 @@ export interface RouteDeps {
   budget: BodyBudget;
   freeBytes: FreeBytes;
   uploads: UploadGate;
+  clock: Clock;
 }
 
 async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Promise<Response> {

@@ -3,12 +3,8 @@
 
 import { randomUUID } from "node:crypto";
 import {
-  createReadStream,
-  closeSync,
   existsSync,
-  fstatSync,
   mkdirSync,
-  openSync,
   readdirSync,
   renameSync,
   rmSync,

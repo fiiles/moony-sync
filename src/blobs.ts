@@ -7,7 +7,7 @@ import type { BlobFiles } from "./blob-files.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { fail, type Result } from "./http.js";
-import { DEFAULT_BLOB_QUOTA_BYTES } from "./limits.js";
+import { DEFAULT_BLOB_QUOTA_BYTES, ORPHAN_SNAPSHOT_AGE_SECONDS } from "./limits.js";
 import type { Vaults } from "./vaults.js";
 
 const QUOTA_KEY = "blob_quota_bytes";
@@ -56,6 +56,13 @@ export interface Blobs {
   /** vaults.authorize(owner): deletes the record, then the file. Ok whether or not a record
    *  existed; a file that cannot be removed is left as an orphan for housekeeping. */
   remove(vaultId: string, token: string, blobId: string): Result;
+  /** Daily, per vault: removes files without a record that are older than the orphan age (an
+   *  upload whose request died) and deletes records whose file is missing, so the devices
+   *  upload the blob again. Does nothing for a vault without a record. */
+  housekeep(vaultId: string): void;
+  /** Daily: removes blob directories of vaults with no record and no pending wipe once nothing
+   *  in them is newer than the orphan age. Failures are retried by the next run. */
+  sweep(): void;
 }
 
 export function createBlobs(db: Db, clock: Clock, vaults: Vaults, files: BlobFiles): Blobs {
@@ -66,6 +73,9 @@ export function createBlobs(db: Db, clock: Clock, vaults: Vaults, files: BlobFil
       "SELECT blob_id, size, created_at FROM blobs WHERE vault_id = ? AND blob_id > ? ORDER BY blob_id LIMIT ?",
     ),
     delete: db.prepare("DELETE FROM blobs WHERE vault_id = ? AND blob_id = ?"),
+    ids: db.prepare("SELECT blob_id FROM blobs WHERE vault_id = ?"),
+    vault: db.prepare("SELECT 1 FROM vaults WHERE vault_id = ?"),
+    pendingWipe: db.prepare("SELECT 1 FROM pending_wipes WHERE vault_id = ?"),
     insert: db.prepare(
       "INSERT INTO blobs (vault_id, blob_id, size, created_at) VALUES (?, ?, ?, ?)",
     ),
@@ -140,6 +150,35 @@ export function createBlobs(db: Db, clock: Clock, vaults: Vaults, files: BlobFil
         // The record is gone, so the blob no longer exists; housekeeping sweeps the orphan file.
       }
       return { ok: true };
+    },
+
+    housekeep(vaultId) {
+      if (!q.vault.get(vaultId)) return;
+      const known = new Set((q.ids.all(vaultId) as { blob_id: string }[]).map((r) => r.blob_id));
+      const cutoff = clock() - ORPHAN_SNAPSHOT_AGE_SECONDS;
+      for (const f of files.listFiles(vaultId)) {
+        if (known.has(f.blobId) || f.mtime >= cutoff) continue;
+        try {
+          files.remove(vaultId, f.blobId);
+        } catch {
+          // Tried again on the next run.
+        }
+      }
+      for (const blobId of known) {
+        if (files.size(vaultId, blobId) === null) q.delete.run(vaultId, blobId);
+      }
+    },
+
+    sweep() {
+      const cutoff = clock() - ORPHAN_SNAPSHOT_AGE_SECONDS;
+      for (const dir of files.listVaultDirs()) {
+        if (dir.mtime >= cutoff || q.vault.get(dir.vaultId) || q.pendingWipe.get(dir.vaultId)) continue;
+        try {
+          files.removeVault(dir.vaultId);
+        } catch {
+          // Tried again on the next sweep.
+        }
+      }
     },
   };
 }

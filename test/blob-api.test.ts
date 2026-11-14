@@ -420,12 +420,13 @@ describe("list", () => {
       expect((await uploadBlob(t, v, id, "x".repeat(i + 1))).status).toBe(201);
       entries.push({ id, size: i + 1, createdAt: t.clock.now });
     }
-    expect(await (await list(t, v, "?limit=2")).json()).toEqual({ blobs: entries.slice(0, 2), more: true });
+    expect(await (await list(t, v, "?limit=2")).json()).toEqual({ blobs: entries.slice(0, 2), more: true, now: t.clock.now });
     expect(await (await list(t, v, `?after=${ids[1]}&limit=2`)).json()).toEqual({
       blobs: entries.slice(2, 4),
       more: true,
+      now: t.clock.now,
     });
-    expect(await (await list(t, v, `?after=${ids[3]}`)).json()).toEqual({ blobs: [entries[4]], more: false });
+    expect(await (await list(t, v, `?after=${ids[3]}`)).json()).toEqual({ blobs: [entries[4]], more: false, now: t.clock.now });
   });
 
   it("defaults and bounds: no params lists all; limit=0 is 400 invalid_limit; limit=5000 clamps; bad after is 400 invalid_blob_id", async () => {
@@ -446,14 +447,25 @@ describe("list", () => {
     }
   });
 
+  it("answers the server's clock as now, so a device can measure a blob's age on it", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    t.clock.now = 1_900_000_123;
+    expect(((await (await list(t, v)).json()) as { now: number }).now).toBe(1_900_000_123); // empty list
+    await uploadBlob(t, v, newBlobId(), "x");
+    t.clock.now += 500;
+    const body = (await (await list(t, v)).json()) as { now: number; blobs: { createdAt: number }[] };
+    expect([body.now, body.now - body.blobs[0]!.createdAt]).toEqual([1_900_000_623, 500]);
+  });
+
   it("an empty vault lists nothing; another vault's blobs are never listed; a previous token can list", async () => {
     const t = testApp();
     const v = await newVault(t);
     const other = await newVault(t);
-    expect(await (await list(t, v)).json()).toEqual({ blobs: [], more: false });
+    expect(await (await list(t, v)).json()).toEqual({ blobs: [], more: false, now: t.clock.now });
     const id = newBlobId();
     await uploadBlob(t, other, id, "other");
-    expect(await (await list(t, v)).json()).toEqual({ blobs: [], more: false });
+    expect(await (await list(t, v)).json()).toEqual({ blobs: [], more: false, now: t.clock.now });
     await uploadBlob(t, v, id, "mine");
     await rotate(t, v);
     const res = await list(t, v);

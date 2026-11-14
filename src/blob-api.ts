@@ -13,7 +13,7 @@ import {
   MAX_BLOB_UPLOADS_PER_VAULT,
 } from "./limits.js";
 import { isBlobId } from "./encoding.js";
-import type { RouteDeps } from "./sync-api.js";
+import { intParam, type RouteDeps } from "./sync-api.js";
 
 /** An error answer of a blob route: the usual JSON body plus the code in a header, so a client
  *  that only sees the head of a response (HEAD) can still tell what went wrong. */
@@ -63,13 +63,12 @@ export async function blobRoute(
     if (method !== "GET") return blobError(405, "method_not_allowed");
     const after = url.searchParams.get("after");
     if (after !== null && !isBlobId(after)) return blobError(400, "invalid_blob_id");
-    const raw = url.searchParams.get("limit");
-    const asked = raw !== null && /^[0-9]{1,15}$/.test(raw) ? Number(raw) : DEFAULT_BLOB_LIST_LIMIT;
-    const limit = Math.min(asked, MAX_BLOB_LIST_LIMIT);
+    const limit = Math.min(intParam(url, "limit") ?? DEFAULT_BLOB_LIST_LIMIT, MAX_BLOB_LIST_LIMIT);
     if (limit < 1) return blobError(400, "invalid_limit");
     const r = blobs.list(vaultId, token, after, limit);
     if (!r.ok) return blobError(r.status, r.error);
-    return json({ blobs: r.blobs, more: r.more });
+    // `now` is the server's clock: a device measures a blob's age (now - createdAt) on it.
+    return json({ blobs: r.blobs, more: r.more, now: rd.clock() });
   }
 
   if (method === "PUT") {
