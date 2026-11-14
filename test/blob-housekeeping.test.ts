@@ -38,7 +38,11 @@ describe("housekeep", () => {
     const v = await newVault(t);
     const kept = newBlobId();
     expect((await uploadBlob(t, v, kept, "recorded")).status).toBe(201);
+    const past = real - ORPHAN_SNAPSHOT_AGE_SECONDS - 10;
+    utimesSync(join(blobDir(t, v.id), kept), past, past); // old, but it has a record
     const oldOrphan = newBlobId();
+    const oldTemp = `${newBlobId()}.${newBlobId()}.tmp`; // an upload in flight is not an orphan
+    plant(blobDir(t, v.id), oldTemp, past);
     const freshOrphan = newBlobId();
     plant(blobDir(t, v.id), oldOrphan, real - ORPHAN_SNAPSHOT_AGE_SECONDS - 10);
     plant(blobDir(t, v.id), freshOrphan, real);
@@ -46,7 +50,7 @@ describe("housekeep", () => {
 
     t.stores.blobs.housekeep(v.id);
 
-    expect(blobFiles(t, v)).toEqual([kept, freshOrphan, "notes.txt"].sort());
+    expect(blobFiles(t, v)).toEqual([kept, freshOrphan, "notes.txt", oldTemp].sort());
     expect(rows(t)).toBe(1);
   });
 
@@ -64,6 +68,17 @@ describe("housekeep", () => {
     expect((await list.json()).blobs).toEqual([]);
     const again = await uploadBlob(t, v, id, "content");
     expect([again.status, await again.json()]).toEqual([201, { created: true }]);
+  });
+
+  it("keeps a record when its file cannot be inspected for a reason other than being gone", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    expect((await uploadBlob(t, v, newBlobId(), "content")).status).toBe(201);
+    // The vault's directory is replaced by a plain file: stat fails with ENOTDIR, not ENOENT.
+    rmSync(blobDir(t, v.id), { recursive: true });
+    writeFileSync(blobDir(t, v.id), "not a directory");
+    t.stores.blobs.housekeep(v.id);
+    expect(rows(t)).toBe(1);
   });
 
   it("does nothing for a vault without a record", () => {
@@ -94,6 +109,20 @@ describe("sweep", () => {
 
     expect(existsSync(blobDir(t, old))).toBe(false);
     expect(existsSync(blobDir(t, fresh))).toBe(true);
+  });
+
+  it("keeps an old blob directory of a vault that has a record", async () => {
+    const t = testApp();
+    const real = Math.floor(Date.now() / 1000);
+    t.clock.now = real;
+    const v = await newVault(t);
+    const id = newBlobId();
+    expect((await uploadBlob(t, v, id, "content")).status).toBe(201);
+    const past = real - ORPHAN_SNAPSHOT_AGE_SECONDS - 10;
+    utimesSync(join(blobDir(t, v.id), id), past, past);
+    utimesSync(blobDir(t, v.id), past, past);
+    t.stores.blobs.sweep();
+    expect(blobFiles(t, v)).toEqual([id]);
   });
 
   it("leaves the directory of a pending wipe to the vault sweep", () => {

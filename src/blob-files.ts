@@ -36,6 +36,8 @@ export interface BlobFiles {
   open(vaultId: string, blobId: string): { stream: ReadableStream<Uint8Array>; size: number } | null;
   /** Size on disk, null when missing or an ID is malformed. */
   size(vaultId: string, blobId: string): number | null;
+  /** True only when the file is really gone (ENOENT); any other stat error is "not known". */
+  missing(vaultId: string, blobId: string): boolean;
   remove(vaultId: string, blobId: string): void;
   removeVault(vaultId: string): void;
   /** Deletes every "*.tmp" under the root; run once at start. */
@@ -91,6 +93,16 @@ export function createBlobFiles(root: string): BlobFiles {
         return statSync(join(dirOf(vaultId), blobId)).size;
       } catch {
         return null;
+      }
+    },
+
+    missing(vaultId, blobId) {
+      if (!isVaultId(vaultId) || !isBlobId(blobId)) return false;
+      try {
+        statSync(join(dirOf(vaultId), blobId));
+        return false;
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code === "ENOENT";
       }
     },
 

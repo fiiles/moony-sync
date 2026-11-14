@@ -165,7 +165,8 @@ export function createBlobs(db: Db, clock: Clock, vaults: Vaults, files: BlobFil
         }
       }
       for (const blobId of known) {
-        if (files.size(vaultId, blobId) === null) q.delete.run(vaultId, blobId);
+        // Only a file that is really gone (ENOENT) drops its record; a transient error must not.
+        if (files.missing(vaultId, blobId)) q.delete.run(vaultId, blobId);
       }
     },
 
