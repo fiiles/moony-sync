@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll } from "vitest";
+import { afterAll, expect, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { openDb } from "../src/db.js";
@@ -138,6 +138,48 @@ export const newBlobId = (): string => randomUUID();
 export function blobFiles(t: TestApp, v: { id: string }): string[] {
   const dir = join(t.dataDir, "blobs", v.id);
   return existsSync(dir) ? readdirSync(dir).sort() : [];
+}
+
+/** A blob upload: PUT with a Content-Length of the content. */
+export function uploadBlob(
+  t: TestApp,
+  v: Vault,
+  blobId: string,
+  content: Uint8Array | string,
+  headers: HeadersInit = {},
+): Promise<Response> {
+  const body = typeof content === "string" ? new TextEncoder().encode(content) : content;
+  const h = auth(v, { "content-type": "application/octet-stream", ...Object.fromEntries(new Headers(headers)) });
+  h.set("content-length", String(body.byteLength));
+  return t.call("PUT", `/v1/vaults/${v.id}/blobs/${blobId}`, { headers: h, body: body as BodyInit });
+}
+
+/** A blob upload whose body the test finishes (or breaks) by hand: 2 bytes are sent at once. */
+export function heldBlobUpload(t: TestApp, v: Vault, blobId: string, content: Uint8Array | string) {
+  const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+  let ctl!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      ctl = c;
+      c.enqueue(bytes.subarray(0, 2));
+    },
+  });
+  const response = t.call("PUT", `/v1/vaults/${v.id}/blobs/${blobId}`, {
+    headers: auth(v, { "content-length": String(bytes.byteLength) }),
+    body,
+    duplex: "half",
+  } as RequestInit);
+  return {
+    response,
+    started: () => vi.waitFor(() => expect(blobFiles(t, v).some((f) => f.endsWith(".tmp"))).toBe(true)),
+    finish() {
+      ctl.enqueue(bytes.subarray(2));
+      ctl.close();
+    },
+    fail() {
+      ctl.error(new Error("client went away"));
+    },
+  };
 }
 
 export function stream(bytes: Uint8Array): ReadableStream<Uint8Array> {

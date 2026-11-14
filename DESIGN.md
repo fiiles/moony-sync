@@ -295,6 +295,26 @@ other call gets `403 {"error": "token_read_only"}`. Thirty days after the rotati
 a previous token is unknown (`401 unauthorized`) and housekeeping deletes it and its bundle. Ops
 pushed with the current token after a rotation are accepted as usual; the server never parses ops.
 
+### Blobs (attachments)
+
+Encrypted documents and photos, one file per blob, stored as `blobs/<vault id>/<blob id>`. A blob
+ID is a canonical lowercase UUID; anything else is `400 invalid_blob_id`, answered before any
+limiter, token check or file access. Every error answer of a blob route carries the same code in
+a `Moony-Error` header as well (a `HEAD` answer has no body). Blobs are immutable: an ID is
+written once.
+
+| Method | Path | Notes |
+|---|---|---|
+| `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
+| `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current or previous token, also in the read grace. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
+| `GET` | `/v1/vaults/:vaultId/blobs/:blobId` | The same access as `HEAD`. Raw bytes, `Content-Length`, `Moony-Blob-Size`; `404 blob_not_found` (also for a record whose file is gone). |
+
+Order of checks for `PUT`: token and entitlement come first, before a single body byte is read;
+an existing blob answers `200` without the body; then the length, the free space, and only then
+the body, which streams to a temporary file that is fsynced and renamed into place in the same
+transaction that inserts the record. The token is checked again at that moment, so a vault
+deleted or a token rotated while the body streamed leaves no file and no record.
+
 ### Pairing mailbox
 
 For the key exchange that adds a device (the Moony client's pairing flow). No auth headers: slot
@@ -352,7 +372,8 @@ nothing, and one client key (IPv4 address or IPv6 /64, proxy-aware like the limi
 most 8 MiB of arrived-and-held bytes in flight, so one address cannot starve the rest by
 trickling bodies; a chunk that does not fit answers `503 busy`. A body that delivers no bytes for 30
 seconds is aborted with `408 {"error":"body_timeout"}`. Snapshot uploads stream to disk and are
-exempt from both.
+exempt from both. Blob uploads likewise stream to disk and are exempt from the buffered-body
+budget, but are aborted after 30 seconds without bytes (`408 body_timeout`).
 
 ## Housekeeping
 
@@ -405,6 +426,7 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 - **Per vault:** the account it belongs to, the SHA-256 of the current token and of tokens rotated
   away in the last 30 days (with when), rekey bundles (opaque ciphertext) with their rotation
   number, head and time, op sizes, op IDs, the time each op arrived, snapshot sizes and times,
+  blob IDs (random UUIDs the app chooses), sizes and upload times,
   and the **time of the last authorised request** (rounded to the minute), which the admin sees as
   a person's last activity.
 - **Pairing mailboxes:** while one exists (at most 10 minutes), the slot contents, which are an

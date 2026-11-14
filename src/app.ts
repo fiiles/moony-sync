@@ -13,6 +13,7 @@ import { createMailboxes, type Mailboxes } from "./mailboxes.js";
 import { createPeople, type People } from "./people.js";
 import { clientKey, createLimiters } from "./ratelimit.js";
 import { createBlobFiles, type BlobFiles } from "./blob-files.js";
+import { createBlobs, type Blobs } from "./blobs.js";
 import { createSnapshots, type Snapshots } from "./snapshots.js";
 import { createVaults, type Vaults } from "./vaults.js";
 import { syncRoutes } from "./sync-api.js";
@@ -43,6 +44,7 @@ export type AppDeps = Deps & { freeBytes: FreeBytes };
 export interface Stores {
   people: People;
   vaults: Vaults;
+  blobs: Blobs;
   snapshots: Snapshots;
   blobFiles: BlobFiles;
   mailboxes: Mailboxes;
@@ -62,12 +64,14 @@ export function createApp(given: Deps): {
   const blobFiles = createBlobFiles(join(deps.config.dataDir, "blobs"));
   blobFiles.sweepTemp();
   sweepBackupTemp(deps.config.dataDir);
+  const vaults = createVaults(deps.db, deps.clock, people, snapshots, blobFiles);
   const stores: Stores = {
     people,
     snapshots,
     blobFiles,
     mailboxes: createMailboxes(deps.db, deps.clock),
-    vaults: createVaults(deps.db, deps.clock, people, snapshots, blobFiles),
+    vaults,
+    blobs: createBlobs(deps.db, deps.clock, vaults, blobFiles),
   };
   const app = new Hono<{ Bindings: AppBindings }>();
 

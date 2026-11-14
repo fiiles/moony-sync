@@ -58,7 +58,10 @@ export interface Vaults {
   ): Promise<Result<{ ops: StoredOp[]; head: number; more: boolean }>>;
   /** The verdict `access` would get for this token, without side effects (no activity mark): the
    *  routes call it before reading a request body, the real call re-checks in its transaction. */
-  check(vaultId: string, token: string, need: "write" | "owner"): Result;
+  check(vaultId: string, token: string, need: Access): Result;
+  /** The verdict plus the activity mark; joins an outer transaction. For services that run their
+   *  own transaction on the vault (blobs). */
+  authorize(vaultId: string, token: string, access: Access): Result;
   /** Checks a snapshot upload may start; the route then streams the body to a file. */
   authorizeSnapshot(vaultId: string, token: string, seq: number): Promise<Result>;
   /** Records an uploaded snapshot. `stale` tells the route to delete the file it just wrote. */
@@ -116,7 +119,7 @@ interface Meta {
  *  write: needs entitlement and the current token;
  *  owner: the current token only (deleting your data or rotating the token never needs
  *  entitlement). */
-type Access = "read" | "write" | "owner";
+export type Access = "read" | "write" | "owner";
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 const asBuffer = (u: Uint8Array): Buffer => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
@@ -412,6 +415,11 @@ export function createVaults(
         bytes: m.bytes,
         rotation: m.rotation,
       };
+    },
+
+    authorize(vaultId, token, access) {
+      const a = authorize(vaultId, token, access);
+      return a.ok ? { ok: true } : a;
     },
 
     check(vaultId, token, need) {

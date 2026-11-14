@@ -2,12 +2,14 @@
 
 import { Hono, type Context } from "hono";
 import type { AppBindings, AppDeps, Stores } from "./app.js";
+import { blobError, blobRoute } from "./blob-api.js";
 import { hasRoom, type FreeBytes } from "./disk.js";
 import {
   base64DecodedLength,
   decodeBase64,
   encodeBase64,
   isAccountNumber,
+  isBlobId,
   isMailboxId,
   isOpId,
   isVaultId,
@@ -79,7 +81,7 @@ export function syncRoutes(deps: AppDeps, stores: Stores, limiters: Limiters, bu
 /** Token + rekey bundle: base64 of 256 KiB is ~342 KiB, plus the JSON around it. */
 const MAX_ROTATE_BODY_BYTES = 512 * 1024;
 const PAIRING_PATH = /^\/v1\/pairing\/([^/]+)(?:\/([^/]+))?$/;
-const VAULT_PATH = /^\/v1\/vaults\/([^/]+)(\/ops|\/snapshot|\/token|\/rekey)?$/;
+const VAULT_PATH = /^\/v1\/vaults\/([^/]+)(\/ops|\/snapshot|\/token|\/rekey|\/blobs(?:\/([^/]+))?)?$/;
 
 function bearer(request: Request): string | null {
   const h = request.headers.get("authorization") ?? "";
@@ -109,7 +111,7 @@ function parseOps(value: unknown): IncomingOp[] | null {
   return out;
 }
 
-interface RouteDeps {
+export interface RouteDeps {
   stores: Stores;
   limiters: Limiters;
   budget: BodyBudget;
@@ -123,15 +125,21 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
   if (!match) return errorResponse(404, "not_found");
   const vaultId = match[1]!;
   const sub = match[2] ?? "";
-  if (!isVaultId(vaultId)) return errorResponse(400, "invalid_vault_id");
+  // Blob paths answer every error with the Moony-Error header as well.
+  const isBlob = sub.startsWith("/blobs");
+  const err = isBlob ? blobError : errorResponse;
+  if (!isVaultId(vaultId)) return err(400, "invalid_vault_id");
+  // The blob segment is judged before any limiter, token check or file-system call.
+  if (isBlob && match[3] !== undefined && !isBlobId(match[3])) return blobError(400, "invalid_blob_id");
 
   // Per client address first, so nobody can hammer random vault IDs (or guess account numbers
   // through vault creation); then per vault + token, so junk tokens cannot use up a real
   // vault's quota.
-  if (limiters.vaultIp.hit(caller)) return errorResponse(429, "rate_limited");
+  if (limiters.vaultIp.hit(caller)) return err(429, "rate_limited");
   const token = bearer(request);
-  if (!token) return errorResponse(401, "unauthorized");
-  if (limiters.vault.hit(tokenKey(vaultId, token))) return errorResponse(429, "rate_limited");
+  if (!token) return err(401, "unauthorized");
+  if (limiters.vault.hit(tokenKey(vaultId, token))) return err(429, "rate_limited");
+  if (isBlob) return blobRoute(rd, request, url, vaultId, match[3] ?? null, token);
   const { vaults, snapshots } = stores;
   const method = request.method;
 
