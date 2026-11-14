@@ -48,3 +48,9 @@ export const MAX_INFLIGHT_BODY_BYTES = 64 * 1024 * 1024;
 export const MAX_MAILBOX_TOTAL_BYTES = 64 * 1024 * 1024;
 /** How often expired pairing mailboxes are emptied. */
 export const MAILBOX_SWEEP_INTERVAL_SECONDS = 60;
+/** A request body that delivers no bytes for this long is aborted (408 body_timeout). */
+export const IDLE_BODY_SECONDS = 30;
+/** Bytes one client (IPv4 address or IPv6 /64) may hold in open pairing slots. */
+export const MAX_MAILBOX_CLIENT_BYTES = 8 * 1024 * 1024;
+/** Every stored op is charged its ciphertext plus this much against the vault's op quota. */
+export const OP_OVERHEAD_BYTES = 128;

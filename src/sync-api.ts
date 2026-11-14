@@ -12,7 +12,7 @@ import {
   isVaultId,
   isVaultToken,
 } from "./encoding.js";
-import { busy, errorResponse, fromResult, json, readBody, readJson, withBodyBudget, type BodyBudget } from "./http.js";
+import { errorResponse, fromResult, json, readBody, readJson, type BodyBudget } from "./http.js";
 import {
   DEFAULT_PULL_LIMIT,
   DEFAULT_REKEY_LIMIT,
@@ -152,11 +152,7 @@ async function vaultRoute(
       // The token is judged before a single body byte is read.
       const allowed = vaults.check(vaultId, token, "write");
       if (!allowed.ok) return errorResponse(allowed.status, allowed.error);
-      const read = await withBodyBudget(budget, request, MAX_PUSH_BODY_BYTES, () =>
-        readJson(request, MAX_PUSH_BODY_BYTES),
-      );
-      if (read === null) return busy();
-      const body = read.value;
+      const body = await readJson(request, MAX_PUSH_BODY_BYTES, budget);
       if ("error" in body) return errorResponse(body.status, body.error);
       const ops = parseOps(body.value);
       if (!ops) return errorResponse(400, "invalid_ops");
@@ -231,11 +227,7 @@ async function vaultRoute(
   if (sub === "/token" && method === "POST") {
     const allowed = vaults.check(vaultId, token, "owner");
     if (!allowed.ok) return errorResponse(allowed.status, allowed.error);
-    const read = await withBodyBudget(budget, request, MAX_ROTATE_BODY_BYTES, () =>
-      readJson(request, MAX_ROTATE_BODY_BYTES),
-    );
-    if (read === null) return busy();
-    const body = read.value;
+    const body = await readJson(request, MAX_ROTATE_BODY_BYTES, budget);
     if ("error" in body) return errorResponse(body.status, body.error);
     const { token: next, rekey } = (body.value ?? {}) as { token?: unknown; rekey?: unknown };
     if (!isVaultToken(next)) return errorResponse(400, "invalid_token");
@@ -291,12 +283,9 @@ async function pairingRoute(
   const slot = Number(slotText) as 1 | 2 | 3;
 
   if (method === "PUT") {
-    const slotBody = await withBodyBudget(budget, request, MAX_MAILBOX_SLOT_BYTES, () =>
-      readBody(request, MAX_MAILBOX_SLOT_BYTES),
-    );
-    if (slotBody === null) return busy();
-    const body = slotBody.value;
-    if (!body) return errorResponse(413, "body_too_large");
+    const read = await readBody(request, MAX_MAILBOX_SLOT_BYTES, budget);
+    if ("error" in read) return errorResponse(read.status, read.error);
+    const body = read.bytes;
     if (body.byteLength === 0) return errorResponse(400, "empty_body");
     const r = mailboxes.put(mailboxId, slot, body);
     return r.ok ? new Response(null, { status: 204 }) : errorResponse(r.status, r.error);

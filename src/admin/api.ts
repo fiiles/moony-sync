@@ -5,7 +5,7 @@ import { Hono, type Context } from "hono";
 import { statfs } from "node:fs/promises";
 import type { AppBindings, Deps, Stores } from "../app.js";
 import { encodeConnectionCode, normalizeServerUrl } from "../connection-code.js";
-import { busy, errorResponse, fromResult, json, readJson, withBodyBudget, type BodyBudget } from "../http.js";
+import { errorResponse, fromResult, json, readJson, type BodyBudget } from "../http.js";
 import { normalizeName, type Person } from "../people.js";
 import { clientKey, lastForwarded } from "../ratelimit.js";
 import { backupFileName, createBackupStream } from "./backup.js";
@@ -86,9 +86,7 @@ export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: Body
 
   /** A JSON object body, or the error response to return. */
   async function readObject(c: Ctx): Promise<Record<string, unknown> | Response> {
-    const slot = await withBodyBudget(budget, c.req.raw, MAX_BODY, () => readJson(c.req.raw, MAX_BODY));
-    if (slot === null) return busy();
-    const r = slot.value;
+    const r = await readJson(c.req.raw, MAX_BODY, budget);
     if ("error" in r) return errorResponse(r.status, r.error);
     if (typeof r.value !== "object" || r.value === null || Array.isArray(r.value)) {
       return errorResponse(400, "invalid_request");

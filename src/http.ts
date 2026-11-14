@@ -1,3 +1,5 @@
+import { IDLE_BODY_SECONDS } from "./limits.js";
+
 // Response helpers and the `Result` type service functions return; routes map it to HTTP.
 
 export type Failure = { ok: false; status: number; error: string };
@@ -21,24 +23,88 @@ export function fromResult(r: Failure | ({ ok: true } & object), status = 200): 
   return json(rest, status);
 }
 
+/** How many request bytes may be buffered in memory at once across the sync and admin APIs.
+ *  A body reserves bytes as they ARRIVE (never what it merely declares), so a connection that
+ *  sends headers and then nothing holds nothing. Snapshot uploads stream to disk and do not use
+ *  it. */
+export interface BodyBudget {
+  /** False when `bytes` more would pass the limit (nothing is reserved then). */
+  tryReserve(bytes: number): boolean;
+  release(bytes: number): void;
+}
+
+export function createBodyBudget(limit: number): BodyBudget {
+  let used = 0;
+  return {
+    tryReserve(bytes) {
+      if (used + bytes > limit) return false;
+      used += bytes;
+      return true;
+    },
+    release(bytes) {
+      used = Math.max(0, used - bytes);
+    },
+  };
+}
+
+export type BodyResult = { bytes: Uint8Array } | { error: string; status: number };
+
 /** Reads a request body, stopping as soon as it passes `maxBytes` (a missing or lying
- *  Content-Length must not let a client make the server buffer an unbounded body). */
-export async function readBody(request: Request, maxBytes: number): Promise<Uint8Array | null> {
+ *  Content-Length must not let a client make the server buffer an unbounded body). Each chunk is
+ *  reserved from `budget` as it arrives (503 busy when it does not fit) and everything is given
+ *  back when the read ends. A body that delivers nothing for `idleMs` is aborted: 408. */
+export async function readBody(
+  request: Request,
+  maxBytes: number,
+  budget?: BodyBudget,
+  idleMs: number = IDLE_BODY_SECONDS * 1000,
+): Promise<BodyResult> {
+  const tooLarge = { error: "body_too_large", status: 413 };
   const declared = Number(request.headers.get("content-length") ?? "NaN");
-  if (Number.isFinite(declared) && declared > maxBytes) return null;
-  if (!request.body) return new Uint8Array();
+  if (Number.isFinite(declared) && declared > maxBytes) return tooLarge;
+  if (!request.body) return { bytes: new Uint8Array() };
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      return null;
+  let reserved = 0;
+  const next = (): Promise<ReadableStreamReadResult<Uint8Array> | "idle"> =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve("idle"), idleMs);
+      reader.read().then(
+        (r) => {
+          clearTimeout(timer);
+          resolve(r);
+        },
+        (e: unknown) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      );
+    });
+  try {
+    for (;;) {
+      const r = await next();
+      if (r === "idle") {
+        void reader.cancel().catch(() => undefined);
+        return { error: "body_timeout", status: 408 };
+      }
+      if (r.done) break;
+      total += r.value.byteLength;
+      if (total > maxBytes) {
+        void reader.cancel().catch(() => undefined);
+        return tooLarge;
+      }
+      if (budget) {
+        if (!budget.tryReserve(r.value.byteLength)) {
+          void reader.cancel().catch(() => undefined);
+          return { error: "busy", status: 503 };
+        }
+        reserved += r.value.byteLength;
+      }
+      chunks.push(r.value);
     }
-    chunks.push(value);
+  } finally {
+    if (budget) budget.release(reserved);
   }
   const out = new Uint8Array(total);
   let offset = 0;
@@ -46,65 +112,21 @@ export async function readBody(request: Request, maxBytes: number): Promise<Uint
     out.set(c, offset);
     offset += c.byteLength;
   }
-  return out;
+  return { bytes: out };
 }
 
 /** Reads a JSON body with a hard size cap. */
 export async function readJson(
   request: Request,
   maxBytes: number,
+  budget?: BodyBudget,
+  idleMs?: number,
 ): Promise<{ value: unknown } | { error: string; status: number }> {
-  const bytes = await readBody(request, maxBytes);
-  if (!bytes) return { error: "body_too_large", status: 413 };
+  const r = await readBody(request, maxBytes, budget, idleMs);
+  if ("error" in r) return r;
   try {
-    return { value: JSON.parse(new TextDecoder().decode(bytes)) };
+    return { value: JSON.parse(new TextDecoder().decode(r.bytes)) };
   } catch {
     return { error: "invalid_json", status: 400 };
   }
 }
-
-/** How many request bytes may be buffered in memory at once across the sync and admin APIs.
- *  Each body reserves what it may still grow to (its declared length, capped by the route's
- *  limit) until it has been read. Snapshot uploads stream to disk and do not use it. */
-export interface BodyBudget {
-  /** The release function, or null when the budget is used up. */
-  acquire(bytes: number): (() => void) | null;
-}
-
-export function createBodyBudget(limit: number): BodyBudget {
-  let used = 0;
-  return {
-    acquire(bytes) {
-      if (used + bytes > limit) return null;
-      used += bytes;
-      let released = false;
-      return () => {
-        if (!released) {
-          released = true;
-          used -= bytes;
-        }
-      };
-    },
-  };
-}
-
-/** Runs `read` with the budget reserved for this request's body; null when the budget is full
- *  (the result is wrapped so a read that itself yields null stays distinguishable). */
-export async function withBodyBudget<T>(
-  budget: BodyBudget,
-  request: Request,
-  maxBytes: number,
-  read: () => Promise<T>,
-): Promise<{ value: T } | null> {
-  const declared = Number(request.headers.get("content-length") ?? "NaN");
-  const reserve = Number.isFinite(declared) && declared >= 0 ? Math.min(declared, maxBytes) : maxBytes;
-  const release = budget.acquire(reserve);
-  if (!release) return null;
-  try {
-    return { value: await read() };
-  } finally {
-    release();
-  }
-}
-
-export const busy = (): Response => errorResponse(503, "busy");
