@@ -2,13 +2,15 @@ import { useRef } from "preact/hooks";
 import { api, BACKUP_URL } from "../api";
 import { useApp } from "../context";
 import { startDownload } from "../download";
-import { useAction } from "../hooks";
+import { formatBytes } from "../format";
+import { useAction, useResource } from "../hooks";
 import { Icon } from "../components/Icon";
 import { PageHead } from "../components/bits";
 import { useI18n } from "../i18n";
 
 export function Backup() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const size = useResource(() => api.backupSize());
   const { refresh } = useApp();
   const { busy, run } = useAction();
   // A download that meets an ended session would save the 401 JSON as "the backup": check first.
@@ -43,6 +45,9 @@ export function Backup() {
         <div class="card__body">
           <h2 class="card__title">{t("backup.downloadTitle")}</h2>
           <p class="card__sub card__sub--text">{t("backup.downloadText")}</p>
+          <p class="card__sub card__sub--text">
+            {size.data ? t("backup.sizeText", { size: formatBytes(size.data.estimatedBytes, lang) }) : t("backup.sizeUnknown")}
+          </p>
         </div>
       </div>
       <div class="two-col two-col--even stack">

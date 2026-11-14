@@ -257,7 +257,7 @@ describe("person detail", () => {
   it("lists the profiles and deletes one after a confirmation", async () => {
     const mock = installMock({
       "GET state": () => ({ json: loggedIn }),
-      "GET people/p1": () => ({ json: { ...person(), vaults: [{ id: "vault-id-1", shortId: "vaultA", bytes: 1024 * 1024, lastActivity: null }] } }),
+      "GET people/p1": () => ({ json: { ...person(), vaults: [{ id: "vault-id-1", shortId: "vaultA", bytes: 1024 * 1024, files: 0, lastActivity: null }] } }),
       "DELETE people/p1/vaults/vault-id-1": () => ({}),
     });
     openApp("/people/p1");
@@ -272,7 +272,7 @@ describe("person detail", () => {
 
 describe("backup", () => {
   it("offers the download and says in plain words what restoring an older backup does", async () => {
-    installMock({ "GET state": () => ({ json: loggedIn }) });
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET backup/size": () => ({ json: { estimatedBytes: 41943040 } }), });
     openApp("/backup", "cs");
     await screen.findByRole("heading", { name: "Záloha" });
     const link = screen.getByRole("link", { name: /Stáhnout zálohu/ });
@@ -283,7 +283,7 @@ describe("backup", () => {
   });
 
   it("says the archive holds account numbers and the second-factor secret, not 'encrypted data only'", async () => {
-    installMock({ "GET state": () => ({ json: loggedIn }) });
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET backup/size": () => ({ json: { estimatedBytes: 41943040 } }), });
     openApp("/backup");
     await screen.findByRole("heading", { name: "Backup" });
     const text = document.body.textContent ?? "";
@@ -298,7 +298,7 @@ describe("backup", () => {
   });
 
   it("says it in English too", async () => {
-    installMock({ "GET state": () => ({ json: loggedIn }) });
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET backup/size": () => ({ json: { estimatedBytes: 41943040 } }), });
     openApp("/backup");
     await screen.findByRole("heading", { name: "Backup" });
     expect(document.body.textContent).toContain("the sync server went back");
@@ -308,7 +308,7 @@ describe("backup", () => {
 
 describe("settings", () => {
   it("switching the language changes the text and is remembered", async () => {
-    installMock({ "GET state": () => ({ json: loggedIn }), "GET overview": () => ({ json: overviewBody() }) });
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET overview": () => ({ json: overviewBody() }), "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }), });
     openApp("/settings");
     await screen.findByRole("heading", { name: "Settings" });
     fireEvent.click(screen.getAllByRole("button", { name: "Čeština" })[0]!);
@@ -321,6 +321,7 @@ describe("settings", () => {
     const mock = installMock({
       "GET state": () => ({ json: loggedIn }),
       "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }),
       "POST password": () => ({}),
     });
     openApp("/settings");
@@ -337,10 +338,73 @@ describe("settings", () => {
     installMock({
       "GET state": () => ({ json: { ...loggedIn, twoFactor: true, require2fa: true } }),
       "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }),
     });
     openApp("/settings");
     await screen.findByRole("heading", { name: "Settings" });
     expect(screen.queryByRole("button", { name: "Turn off" })).toBeNull();
+  });
+});
+
+describe("blob quota, files and backup size", () => {
+  const settingsMock = (mock: Record<string, any> = {}) =>
+    installMock({
+      "GET state": () => ({ json: loggedIn }),
+      "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10 * 1024 ** 3 } }),
+      "PUT settings": (b) => ({ json: b }),
+      ...mock,
+    });
+
+  it("settings: the quota field shows GiB and saves bytes", async () => {
+    const mock = settingsMock();
+    openApp("/settings");
+    await screen.findByRole("heading", { name: "Settings" });
+    await waitFor(() => expect((screen.getByLabelText("Per profile (GiB)") as HTMLInputElement).value).toBe("10"));
+    type("Per profile (GiB)", "25");
+    fireEvent.click(screen.getByRole("button", { name: "Save limit" }));
+    await screen.findByText("The limit was saved.");
+    expect(mock.calls.find((c) => c.method === "PUT" && c.path === "settings")?.body).toEqual({ blobQuotaBytes: 25 * 1024 ** 3 });
+  });
+
+  it("settings: a quota that is not a whole number is refused before any request", async () => {
+    const mock = settingsMock();
+    openApp("/settings");
+    await waitFor(() => expect((screen.getByLabelText("Per profile (GiB)") as HTMLInputElement).value).toBe("10"));
+    for (const bad of ["2.5", "", "1048577", "-1"]) {
+      type("Per profile (GiB)", bad);
+      fireEvent.click(screen.getByRole("button", { name: "Save limit" }));
+      expect((await screen.findByRole("alert")).textContent).toContain("whole number of GiB");
+    }
+    expect(mock.calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("person detail shows each profile's file count", async () => {
+    installMock({
+      "GET state": () => ({ json: loggedIn }),
+      "GET people/p1": () => ({ json: { ...person(), vaults: [{ id: "v1", shortId: "vaultA", bytes: 1024, files: 3, lastActivity: null }] } }),
+    });
+    openApp("/people/p1");
+    await screen.findByText("vaultA");
+    expect(screen.getByRole("columnheader", { name: "Files" })).toBeTruthy();
+    expect(screen.getByText("3").getAttribute("data-label")).toBe("Files");
+  });
+
+  it("backup shows the estimated size, in Czech too", async () => {
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET backup/size": () => ({ json: { estimatedBytes: 1.2 * 1024 ** 3 } }) });
+    openApp("/backup");
+    await screen.findByText(/Estimated size: 1\.2 GB/);
+    cleanup();
+    openApp("/backup", "cs");
+    await screen.findByText(/Odhadovaná velikost: 1,2 GB/);
+  });
+
+  it("backup says nothing about a size when it cannot be loaded", async () => {
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET backup/size": () => ({ status: 500, json: { error: "x" } }) });
+    openApp("/backup");
+    await screen.findByRole("heading", { name: "Backup" });
+    await screen.findByText("Documents and photos are in the archive too, so it can be large.");
+    expect(document.body.textContent).not.toContain("Estimated size");
   });
 });
 
@@ -354,6 +418,7 @@ describe("forced second factor enrolment", () => {
         return { json: { backupCodes: ["AAAAAAAAAA", "BBBBBBBBBB"] } };
       },
       "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }),
     });
     openApp("/");
     await screen.findByRole("heading", { name: "Set up the second factor" });
@@ -393,6 +458,7 @@ describe("navigation", () => {
     installMock({
       "GET state": () => ({ json: loggedIn }),
       "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }),
       "GET people": () => ({ json: [person()] }),
     });
     openApp("/");
@@ -404,7 +470,7 @@ describe("navigation", () => {
   });
 
   it("an unknown path shows a not-found page", async () => {
-    installMock({ "GET state": () => ({ json: loggedIn }) });
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET backup/size": () => ({ json: { estimatedBytes: 41943040 } }), });
     openApp("/nowhere");
     await screen.findByRole("heading", { name: "This page does not exist" });
   });
@@ -465,6 +531,7 @@ describe("backup codes cannot be dismissed", () => {
     installMock({
       "GET state": () => ({ json: loggedIn }),
       "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }),
       "POST 2fa/enrol": () => ({ json: { secret: "JBSWY3DPEHPK3PXP", otpauthUrl: "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP" } }),
       "POST 2fa/confirm": () => ({ json: { backupCodes: ["AAAAAAAAAA"] } }),
     });
@@ -495,6 +562,7 @@ describe("backup codes cannot be dismissed", () => {
     installMock({
       "GET state": () => ({ json: loggedIn }),
       "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }),
       "POST 2fa/enrol": () => ({ json: { secret: "JBSWY3DPEHPK3PXP", otpauthUrl: "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP" } }),
       "POST 2fa/confirm": async () => {
         await gate;
@@ -529,6 +597,7 @@ describe("backup codes cannot be dismissed", () => {
     installMock({
       "GET state": () => ({ json: loggedIn }),
       "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }),
       "POST 2fa/enrol": () => ({ json: { secret: "JBSWY3DPEHPK3PXP", otpauthUrl: "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP" } }),
       "POST 2fa/confirm": async () => {
         confirms += 1;
@@ -605,6 +674,7 @@ describe("add person without an address", () => {
       "GET people": () => ({ json: [] }),
       "POST people": () => ({ status: 409, json: { error: "address_not_set" } }),
       "GET overview": () => ({ json: overviewBody() }),
+      "GET settings": () => ({ json: { publicUrl: null, blobQuotaBytes: 10737418240 } }),
     });
     openApp("/people");
     await screen.findByText("Nobody yet");
@@ -632,7 +702,7 @@ describe("backup download", () => {
   });
 
   it("starts the download when the session is alive", async () => {
-    installMock({ "GET state": () => ({ json: loggedIn }) });
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET backup/size": () => ({ json: { estimatedBytes: 41943040 } }), });
     openApp("/backup");
     fireEvent.click(await screen.findByRole("link", { name: /Download backup/ }));
     await waitFor(() => expect(started).toEqual(["/admin/api/backup"]));

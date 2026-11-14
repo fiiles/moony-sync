@@ -2,24 +2,7 @@
 // buffered at once share one budget.
 
 import { describe, expect, it, vi } from "vitest";
-import { newToken, newVault, newVaultId, testApp, type Vault } from "./helpers.js";
-
-/** A body that counts the chunks the server pulled; each chunk is 64 KiB, `chunks` in all. */
-function countingBody(chunks = 40) {
-  const state = { pulled: 0 };
-  const chunk = new Uint8Array(64 * 1024).fill(0x20);
-  const body = new ReadableStream<Uint8Array>(
-    {
-      pull(controller) {
-        if (state.pulled >= chunks) return controller.close();
-        state.pulled += 1;
-        controller.enqueue(chunk);
-      },
-    },
-    { highWaterMark: 0 },
-  );
-  return { state, body };
-}
+import { countingBody, newToken, newVault, newVaultId, testApp, type Vault } from "./helpers.js";
 
 function post(t: ReturnType<typeof testApp>, path: string, token: string, body: ReadableStream<Uint8Array>) {
   return t.app.fetch(

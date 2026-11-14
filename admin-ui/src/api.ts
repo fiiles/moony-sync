@@ -46,6 +46,7 @@ export interface Vault {
   id: string;
   shortId: string;
   bytes: number;
+  files: number;
   lastActivity: number | null;
 }
 
@@ -108,7 +109,9 @@ export const api = {
   deleteVault: (pid: string, vaultId: string) => request<void>("DELETE", `people/${id(pid)}/vaults/${id(vaultId)}`),
   connectionCode: (pid: string, password: string) =>
     request<{ connectionCode: string }>("POST", `people/${id(pid)}/connection-code`, { password }),
-  settings: () => request<{ publicUrl: string | null }>("GET", "settings"),
+  settings: () => request<{ publicUrl: string | null; blobQuotaBytes: number }>("GET", "settings"),
+  saveBlobQuota: (blobQuotaBytes: number) => request<{ blobQuotaBytes: number }>("PUT", "settings", { blobQuotaBytes }),
+  backupSize: () => request<{ estimatedBytes: number }>("GET", "backup/size"),
   saveAddress: (publicUrl: string) => request<{ publicUrl: string }>("PUT", "settings", { publicUrl }),
 };
 

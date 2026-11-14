@@ -1,10 +1,10 @@
 # Moony sync server
 
 A small server you run yourself, so your Moony devices can keep their data in sync without any
-cloud service in between. It stores and forwards **encrypted** change records and encrypted
-snapshots. It cannot read them: the keys never leave your devices.
+cloud service in between. It stores and forwards **encrypted** change records, encrypted
+snapshots, and the apps' encrypted documents and photos. It cannot read them: the keys never leave your devices.
 
-- One Node process, one folder of data (a SQLite database and snapshot files).
+- One Node process, one folder of data (a SQLite database, snapshot files and the files of documents and photos).
 - A web page to add the people who may use it, block them, delete them and download a backup.
 - No outbound connections. No e-mail, no analytics, no telemetry.
 - Written for a home server or a NAS: a Docker container, `compose.yml`, and a few lines of reverse
@@ -83,6 +83,10 @@ and can still read for 30 days; nothing is deleted; unblocking lets them continu
 (removes the person and all their data on the server; their devices will report that the synced
 data were deleted), and delete a single profile from the person's detail page.
 
+Each profile may store 10 GiB of documents and photos by default. Settings, **Space for documents
+and photos**, changes the limit for the whole server; a lower limit keeps the files already stored
+and makes new ones wait until there is room.
+
 ## https behind a reverse proxy
 
 Moony accepts plain `http://` for your own server but warns about it (see below). For anything
@@ -152,8 +156,9 @@ host other than `localhost`.
 
 ## Backup and restore
 
-Admin page, **Backup**, **Download backup**: a `.tar` with a consistent copy of the database and
-all snapshot files. It can be taken while the server runs.
+Admin page, **Backup**, **Download backup**: a `.tar` with a consistent copy of the database,
+all snapshot files and all documents and photos. It can be taken while the server runs. With
+documents and photos it can be large, so the page shows an estimate of its size first.
 
 **Keep the archive private.** Besides the encrypted data it holds each person's account number
 (needed to show a connection code again) and the second-factor secret in readable form, plus
@@ -215,7 +220,7 @@ All optional. Everything else is set on the admin page and stored in the databas
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `8787` | Listening port |
-| `DATA_DIR` | `/data` (in the image) | Database and snapshots |
+| `DATA_DIR` | `/data` (in the image) | Database, snapshots and blobs |
 | `PUBLIC_URL` | unset | The address apps use, for connection codes. The address saved on the admin's Settings page wins over it. |
 | `TRUST_PROXY` | `0` | `1` behind one reverse proxy, see above. Accepts `1`, `0`, `true`, `false` in any case; anything else stops the server at start. |
 | `REQUIRE_2FA` | `0` | `1` makes the admin's second factor mandatory: enrolment is forced after login and cannot be turned off. Same accepted values. |
@@ -223,10 +228,12 @@ All optional. Everything else is set on the admin page and stored in the databas
 
 ## What it stores
 
-In `DATA_DIR`: `moony-sync.db` (SQLite, WAL mode, with `-wal` and `-shm` files next to it) and a
-`snapshots/` folder. Snapshots are encrypted by the apps; the server keeps the newest two per
-profile. Housekeeping runs once a day inside the server, and every time rule is also checked on
-each request, so a stopped server misses nothing. Details in [`DESIGN.md`](DESIGN.md).
+In `DATA_DIR`: `moony-sync.db` (SQLite, WAL mode, with `-wal` and `-shm` files next to it), a
+`snapshots/` folder and a `blobs/` folder. Snapshots, documents and photos are encrypted by the
+apps; the server keeps the newest two snapshots per profile. Housekeeping runs once a day inside
+the server (it also cleans up abandoned document uploads), and every time rule is also checked on each request, so a stopped server misses
+nothing. Uploads stop with "server full" (`507`) when less than 1 GiB would remain free on the
+data volume (uploads still running count as used), and ordinary sync goes on. Details in [`DESIGN.md`](DESIGN.md).
 
 The log (stdout) contains the start-up line, the setup code while there is no admin,
 `housekeeping: <step> failed`, `unhandled error: <error name>` (the name only) and
@@ -253,7 +260,9 @@ address.
 - **Quota and parallel uploads.** A person's op quota is 256 MiB, counted as the ciphertext plus
   128 bytes per change (so many tiny changes cannot use up the disk unnoticed); real disk use is
   still higher because of row and index overhead beyond the 128 bytes charged: for very small changes the real disk cost can be up to about twice the quota. Snapshot uploads
-  (100 MiB each, 2 kept per profile) are not limited in parallel.
+  (100 MiB each, 2 kept per profile) are not limited in parallel, but a profile may upload at
+  most two documents or photos at once (the nginx `client_max_body_size 128m` advice already
+  covers a 100 MiB document).
 
 ## Development
 

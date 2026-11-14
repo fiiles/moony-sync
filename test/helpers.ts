@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll } from "vitest";
+import { afterAll, expect, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { openDb } from "../src/db.js";
@@ -26,7 +27,14 @@ export function testApp(overrides: Partial<Config> = {}, prepare?: (dataDir: str
   const db = openDb(dataDir);
   const clock = { now: START_TIME };
   const logs: string[] = [];
-  const app = createApp({ config, db, clock: () => clock.now, log: (l) => logs.push(l) });
+  const disk: { free: number | null } = { free: 2 ** 40 };
+  const app = createApp({
+    config,
+    db,
+    clock: () => clock.now,
+    log: (l) => logs.push(l),
+    freeBytes: async () => disk.free,
+  });
   afterAll(() => {
     app.close();
     if (db.open) db.close();
@@ -36,7 +44,24 @@ export function testApp(overrides: Partial<Config> = {}, prepare?: (dataDir: str
     const { clientAddress, ...rest } = init;
     return app.fetch(new Request(`http://localhost${path}`, { method, ...rest }), clientAddress);
   };
-  return { app, db, clock, dataDir, logs, call, stores: app.stores };
+  return { app, db, clock, dataDir, logs, call, stores: app.stores, disk };
+}
+
+/** A body that counts the chunks the server pulled; each chunk is 64 KiB, `chunks` in all. */
+export function countingBody(chunks = 40) {
+  const state = { pulled: 0 };
+  const chunk = new Uint8Array(64 * 1024).fill(0x20);
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (state.pulled >= chunks) return controller.close();
+        state.pulled += 1;
+        controller.enqueue(chunk);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { state, body };
 }
 
 export type TestApp = ReturnType<typeof testApp>;
@@ -105,6 +130,67 @@ export function uploadSnapshot(t: TestApp, v: Vault, seq: number, content: strin
 export function snapshotFiles(t: TestApp, v: { id: string }): string[] {
   const dir = join(t.dataDir, "snapshots", v.id);
   return existsSync(dir) ? readdirSync(dir).sort() : [];
+}
+
+export const newBlobId = (): string => randomUUID();
+
+/** Files of the vault's blob directory, temporary ones included. */
+export function blobFiles(t: TestApp, v: { id: string }): string[] {
+  const dir = join(t.dataDir, "blobs", v.id);
+  return existsSync(dir) ? readdirSync(dir).sort() : [];
+}
+
+/** A blob upload: PUT with a Content-Length of the content. */
+export function uploadBlob(
+  t: TestApp,
+  v: Vault,
+  blobId: string,
+  content: Uint8Array | string,
+  headers: HeadersInit = {},
+): Promise<Response> {
+  const body = typeof content === "string" ? new TextEncoder().encode(content) : content;
+  const h = auth(v, { "content-type": "application/octet-stream", ...Object.fromEntries(new Headers(headers)) });
+  h.set("content-length", String(body.byteLength));
+  return t.call("PUT", `/v1/vaults/${v.id}/blobs/${blobId}`, { headers: h, body: body as BodyInit });
+}
+
+/** A blob upload whose body the test finishes (or breaks) by hand: 2 bytes are sent at once. */
+export function heldBlobUpload(t: TestApp, v: Vault, blobId: string, content: Uint8Array | string) {
+  const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+  let ctl!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      ctl = c;
+      c.enqueue(bytes.subarray(0, 2));
+    },
+  });
+  const response = t.call("PUT", `/v1/vaults/${v.id}/blobs/${blobId}`, {
+    headers: auth(v, { "content-length": String(bytes.byteLength) }),
+    body,
+    duplex: "half",
+  } as RequestInit);
+  return {
+    response,
+    /** Resolves once `count` temporary files exist, i.e. that many uploads are streaming. */
+    started: (count = 1) =>
+      vi.waitFor(() => expect(blobFiles(t, v).filter((f) => f.endsWith(".tmp")).length).toBeGreaterThanOrEqual(count)),
+    finish() {
+      ctl.enqueue(bytes.subarray(2));
+      ctl.close();
+    },
+    fail() {
+      ctl.error(new Error("client went away"));
+    },
+  };
+}
+
+export function stream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(c) {
+      c.enqueue(bytes);
+      c.close();
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------------------------

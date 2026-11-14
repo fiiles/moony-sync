@@ -95,6 +95,7 @@ export function PersonDetail({ id }: { id: string }) {
             <div class="table__head" role="row">
               <span role="columnheader">{t("person.colId")}</span>
               <span role="columnheader" class="cell--num">{t("person.colSpace")}</span>
+              <span role="columnheader" class="cell--num">{t("person.colFiles")}</span>
               <span role="columnheader">{t("person.colActivity")}</span>
               <span role="columnheader" />
             </div>
@@ -105,6 +106,9 @@ export function PersonDetail({ id }: { id: string }) {
                 </span>
                 <span role="cell" class="cell--num" data-label={t("person.colSpace")}>
                   <Size bytes={v.bytes} />
+                </span>
+                <span role="cell" class="cell--num" data-label={t("person.colFiles")}>
+                  {v.files}
                 </span>
                 <span role="cell" data-label={t("person.colActivity")}>
                   <LastActivity at={v.lastActivity} />

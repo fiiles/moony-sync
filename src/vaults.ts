@@ -25,6 +25,7 @@ import {
   SNAPSHOTS_KEPT,
 } from "./limits.js";
 import type { People } from "./people.js";
+import type { BlobFiles } from "./blob-files.js";
 import type { Snapshots } from "./snapshots.js";
 
 export type IncomingOp = { id: string; ct: Uint8Array };
@@ -57,7 +58,10 @@ export interface Vaults {
   ): Promise<Result<{ ops: StoredOp[]; head: number; more: boolean }>>;
   /** The verdict `access` would get for this token, without side effects (no activity mark): the
    *  routes call it before reading a request body, the real call re-checks in its transaction. */
-  check(vaultId: string, token: string, need: "write" | "owner"): Result;
+  check(vaultId: string, token: string, need: Access): Result;
+  /** The verdict plus the activity mark; joins an outer transaction. For services that run their
+   *  own transaction on the vault (blobs). */
+  authorize(vaultId: string, token: string, access: Access): Result;
   /** Checks a snapshot upload may start; the route then streams the body to a file. */
   authorizeSnapshot(vaultId: string, token: string, seq: number): Promise<Result>;
   /** Records an uploaded snapshot. `stale` tells the route to delete the file it just wrote. */
@@ -89,7 +93,7 @@ export interface Vaults {
   /** Unconditional delete (admin). */
   wipe(vaultId: string): void;
   /** Every vault with its stored bytes (ops + snapshot files) and last activity, oldest first. */
-  usage(): { vaultId: string; account: string; bytes: number; lastActivity: number | null }[];
+  usage(): { vaultId: string; account: string; bytes: number; files: number; lastActivity: number | null }[];
   /** Drops every vault row of the account at once (calls answer vault_not_found from here on) and
    *  returns the IDs; joins an outer transaction. Finish with `finishWipes`. */
   dropAccount(account: string): string[];
@@ -115,7 +119,7 @@ interface Meta {
  *  write: needs entitlement and the current token;
  *  owner: the current token only (deleting your data or rotating the token never needs
  *  entitlement). */
-type Access = "read" | "write" | "owner";
+export type Access = "read" | "write" | "owner";
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 const asBuffer = (u: Uint8Array): Buffer => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
@@ -126,6 +130,7 @@ export function createVaults(
   clock: Clock,
   people: People,
   snapshots: Snapshots,
+  blobFiles: BlobFiles,
 ): Vaults {
   const q = {
     meta: db.prepare("SELECT * FROM vaults WHERE vault_id = ?"),
@@ -188,7 +193,9 @@ export function createVaults(
     allIds: db.prepare("SELECT vault_id FROM vaults ORDER BY created_at, rowid"),
     usage: db.prepare(
       `SELECT v.vault_id, v.account, v.last_activity,
-              v.bytes + COALESCE((SELECT SUM(s.size) FROM snapshots s WHERE s.vault_id = v.vault_id), 0) AS total
+              v.bytes + COALESCE((SELECT SUM(s.size) FROM snapshots s WHERE s.vault_id = v.vault_id), 0)
+                      + COALESCE((SELECT SUM(b.size) FROM blobs b WHERE b.vault_id = v.vault_id), 0) AS total,
+              (SELECT COUNT(*) FROM blobs b WHERE b.vault_id = v.vault_id) AS files
        FROM vaults v ORDER BY v.created_at, v.rowid`,
     ),
     byAccount: db.prepare(
@@ -262,6 +269,7 @@ export function createVaults(
   function finishWipe(vaultId: string): void {
     try {
       snapshots.removeVault(vaultId);
+      blobFiles.removeVault(vaultId);
       q.donePendingWipe.run(vaultId);
     } catch {
       // Stays pending; retried by the next housekeep/sweep.
@@ -411,6 +419,11 @@ export function createVaults(
       };
     },
 
+    authorize(vaultId, token, access) {
+      const a = authorize(vaultId, token, access);
+      return a.ok ? { ok: true } : a;
+    },
+
     check(vaultId, token, need) {
       const v = verdict(vaultId, token, need);
       return v.ok ? { ok: true } : v;
@@ -536,8 +549,20 @@ export function createVaults(
 
     usage: () =>
       (
-        q.usage.all() as { vault_id: string; account: string; last_activity: number | null; total: number }[]
-      ).map((r) => ({ vaultId: r.vault_id, account: r.account, bytes: r.total, lastActivity: r.last_activity })),
+        q.usage.all() as {
+          vault_id: string;
+          account: string;
+          last_activity: number | null;
+          total: number;
+          files: number;
+        }[]
+      ).map((r) => ({
+        vaultId: r.vault_id,
+        account: r.account,
+        bytes: r.total,
+        files: r.files,
+        lastActivity: r.last_activity,
+      })),
 
     dropAccount: atomic((account: string) => {
       const ids = (q.byAccount.all(account) as { vault_id: string }[]).map((r) => r.vault_id);

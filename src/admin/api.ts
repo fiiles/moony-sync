@@ -2,13 +2,14 @@
 // routes to this router, behind the same guard.
 
 import { Hono, type Context } from "hono";
-import { statfs } from "node:fs/promises";
-import type { AppBindings, Deps, Stores } from "../app.js";
+import type { AppBindings, AppDeps, Stores } from "../app.js";
 import { encodeConnectionCode, normalizeServerUrl } from "../connection-code.js";
 import { errorResponse, fromResult, json, readJson, type BodyBudget } from "../http.js";
 import { normalizeName, type Person } from "../people.js";
 import { clientKey, lastForwarded } from "../ratelimit.js";
-import { backupFileName, createBackupStream } from "./backup.js";
+import { blobQuotaBytes, setBlobQuotaBytes } from "../blobs.js";
+import { MAX_BLOB_QUOTA_BYTES } from "../limits.js";
+import { backupFileName, createBackupStream, estimateBackupBytes } from "./backup.js";
 import { getSetting, setSetting, type Auth, type SessionInfo } from "./auth.js";
 
 export const COOKIE = "moony_admin";
@@ -32,7 +33,7 @@ function cookieValue(header: string | null): string | null {
   return null;
 }
 
-export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: BodyBudget): Hono<Env> {
+export function adminRoutes(deps: AppDeps, stores: Stores, auth: Auth, budget: BodyBudget): Hono<Env> {
   const { config, db, clock } = deps;
   const router = new Hono<Env>();
 
@@ -209,13 +210,7 @@ export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: Body
     const url = new URL(c.req.url);
     const host = (c.req.header("host") ?? url.host).toLowerCase();
     const hostname = host.replace(/:\d+$/, "");
-    let bytesFree = 0;
-    try {
-      const fs = await statfs(config.dataDir);
-      bytesFree = Number(fs.bavail) * Number(fs.bsize);
-    } catch {
-      /* unknown: report 0 */
-    }
+    const bytesFree = (await deps.freeBytes()) ?? 0; // unknown: report 0
     return json({
       address: address(),
       addressSuggestion: ownOrigin(c),
@@ -253,7 +248,7 @@ export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: Body
       ...personView(p, vaults),
       vaults: vaults
         .filter((v) => v.account === p.account)
-        .map((v) => ({ id: v.vaultId, shortId: v.vaultId.slice(0, 6), bytes: v.bytes, lastActivity: v.lastActivity })),
+        .map((v) => ({ id: v.vaultId, shortId: v.vaultId.slice(0, 6), bytes: v.bytes, files: v.files, lastActivity: v.lastActivity })),
     });
   });
 
@@ -314,12 +309,22 @@ export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: Body
     return noContent();
   });
 
-  router.get("/settings", () => json({ publicUrl: savedAddress() }));
+  router.get("/settings", () => json({ publicUrl: savedAddress(), blobQuotaBytes: blobQuotaBytes(db) }));
 
   router.put("/settings", async (c) => {
     const b = await readObject(c);
     if (b instanceof Response) return b;
-    if (!("publicUrl" in b)) return errorResponse(400, "invalid_request");
+    const keys = Object.keys(b);
+    if (keys.length !== 1) return errorResponse(400, "invalid_request");
+    if (keys[0] === "blobQuotaBytes") {
+      const n = b.blobQuotaBytes;
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > MAX_BLOB_QUOTA_BYTES) {
+        return errorResponse(400, "invalid_quota");
+      }
+      setBlobQuotaBytes(db, n);
+      return json({ blobQuotaBytes: n });
+    }
+    if (keys[0] !== "publicUrl") return errorResponse(400, "invalid_request");
     if (b.publicUrl === null) {
       db.prepare("DELETE FROM settings WHERE key = ?").run(ADDRESS_KEY);
       return json({ publicUrl: null });
@@ -330,6 +335,8 @@ export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: Body
     return json({ publicUrl: url });
   });
 
+  router.get("/backup/size", () => json({ estimatedBytes: estimateBackupBytes(db, config.dataDir) }));
+
   router.get("/backup", async (c) => {
     const now = clock();
     const headers = {
@@ -339,7 +346,7 @@ export function adminRoutes(deps: Deps, stores: Stores, auth: Auth, budget: Body
     };
     // Hono runs this handler for HEAD too; no database copy for a request that drops the body.
     if (c.req.method !== "GET") return new Response(null, { headers });
-    const body = await createBackupStream({ db, dataDir: config.dataDir, snapshots: stores.snapshots, now });
+    const body = await createBackupStream({ db, dataDir: config.dataDir, snapshots: stores.snapshots, blobFiles: stores.blobFiles, now });
     return new Response(body, { headers });
   });
 

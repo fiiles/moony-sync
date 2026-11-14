@@ -1,12 +1,16 @@
 // The /v1 routes of the sync protocol: accounts, vaults and pairing mailboxes.
 
 import { Hono, type Context } from "hono";
-import type { AppBindings, Deps, Stores } from "./app.js";
+import type { AppBindings, AppDeps, Stores } from "./app.js";
+import { blobError, blobRoute, createUploadGate, type UploadGate } from "./blob-api.js";
+import type { Clock } from "./clock.js";
+import { createSpaceReservation, type FreeBytes, type SpaceReservation } from "./disk.js";
 import {
   base64DecodedLength,
   decodeBase64,
   encodeBase64,
   isAccountNumber,
+  isBlobId,
   isMailboxId,
   isOpId,
   isVaultId,
@@ -31,8 +35,9 @@ import type { IncomingOp } from "./vaults.js";
 
 type Env = { Bindings: AppBindings };
 
-export function syncRoutes(deps: Deps, stores: Stores, limiters: Limiters, budget: BodyBudget): Hono<Env> {
+export function syncRoutes(deps: AppDeps, stores: Stores, limiters: Limiters, budget: BodyBudget): Hono<Env> {
   const r = new Hono<Env>();
+  const rd: RouteDeps = { stores, limiters, budget, freeBytes: deps.freeBytes, uploads: createUploadGate(), space: createSpaceReservation(), clock: deps.clock, log: deps.log };
   const callerOf = (c: Context<Env>): string =>
     clientKey(c.req.raw, c.env.clientAddress, deps.config.trustProxy);
 
@@ -65,7 +70,7 @@ export function syncRoutes(deps: Deps, stores: Stores, limiters: Limiters, budge
     });
   });
 
-  r.all("/vaults/*", (c) => vaultRoute(c.req.raw, stores, limiters, budget, callerOf(c)));
+  r.all("/vaults/*", (c) => vaultRoute(c.req.raw, rd, callerOf(c)));
 
   // Pairing needs no credentials: slot contents are public keys or sealed blobs and the ID is
   // random, so it is limited per client address only.
@@ -77,7 +82,7 @@ export function syncRoutes(deps: Deps, stores: Stores, limiters: Limiters, budge
 /** Token + rekey bundle: base64 of 256 KiB is ~342 KiB, plus the JSON around it. */
 const MAX_ROTATE_BODY_BYTES = 512 * 1024;
 const PAIRING_PATH = /^\/v1\/pairing\/([^/]+)(?:\/([^/]+))?$/;
-const VAULT_PATH = /^\/v1\/vaults\/([^/]+)(\/ops|\/snapshot|\/token|\/rekey)?$/;
+const VAULT_PATH = /^\/v1\/vaults\/([^/]+)(\/ops|\/snapshot|\/token|\/rekey|\/blobs(?:\/([^/]+))?)?$/;
 
 function bearer(request: Request): string | null {
   const h = request.headers.get("authorization") ?? "";
@@ -85,7 +90,7 @@ function bearer(request: Request): string | null {
   return m && isVaultToken(m[1]) ? m[1] : null;
 }
 
-function intParam(url: URL, name: string): number | null {
+export function intParam(url: URL, name: string): number | null {
   const v = url.searchParams.get(name);
   if (v === null || !/^[0-9]{1,15}$/.test(v)) return null;
   return Number(v);
@@ -107,27 +112,52 @@ function parseOps(value: unknown): IncomingOp[] | null {
   return out;
 }
 
-async function vaultRoute(
-  request: Request,
-  stores: Stores,
-  limiters: Limiters,
-  budget: BodyBudget,
-  caller: string,
-): Promise<Response> {
+export interface RouteDeps {
+  stores: Stores;
+  limiters: Limiters;
+  budget: BodyBudget;
+  freeBytes: FreeBytes;
+  uploads: UploadGate;
+  /** Declared bytes of uploads in flight, counted against the free-space floor. */
+  space: SpaceReservation;
+  clock: Clock;
+  log: (line: string) => void;
+}
+
+async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Promise<Response> {
+  const { stores, limiters, budget } = rd;
   const url = new URL(request.url);
   const match = VAULT_PATH.exec(url.pathname);
-  if (!match) return errorResponse(404, "not_found");
+  if (!match) {
+    // Blob paths answer every error with the Moony-Error header, an unknown shape included.
+    const blobShaped = /^\/v1\/vaults\/[^/]+\/blobs\//.test(url.pathname);
+    return blobShaped ? blobError(404, "not_found") : errorResponse(404, "not_found");
+  }
   const vaultId = match[1]!;
   const sub = match[2] ?? "";
-  if (!isVaultId(vaultId)) return errorResponse(400, "invalid_vault_id");
+  // Blob paths answer every error with the Moony-Error header as well.
+  const isBlob = sub.startsWith("/blobs");
+  const err = isBlob ? blobError : errorResponse;
+  if (!isVaultId(vaultId)) return err(400, "invalid_vault_id");
+  // The blob segment is judged before any limiter, token check or file-system call.
+  if (isBlob && match[3] !== undefined && !isBlobId(match[3])) return blobError(400, "invalid_blob_id");
 
   // Per client address first, so nobody can hammer random vault IDs (or guess account numbers
   // through vault creation); then per vault + token, so junk tokens cannot use up a real
   // vault's quota.
-  if (limiters.vaultIp.hit(caller)) return errorResponse(429, "rate_limited");
+  if (limiters.vaultIp.hit(caller)) return err(429, "rate_limited");
   const token = bearer(request);
-  if (!token) return errorResponse(401, "unauthorized");
-  if (limiters.vault.hit(tokenKey(vaultId, token))) return errorResponse(429, "rate_limited");
+  if (!token) return err(401, "unauthorized");
+  if (limiters.vault.hit(tokenKey(vaultId, token))) return err(429, "rate_limited");
+  if (isBlob) {
+    try {
+      return await blobRoute(rd, request, url, vaultId, match[3] ?? null, token);
+    } catch (e) {
+      // Same log line as the app's error handler (no IDs, tokens or paths), but with the header.
+      rd.log(`unhandled error: ${e instanceof Error ? e.name : "unknown"}`);
+      return blobError(500, "internal_error");
+    }
+  }
   const { vaults, snapshots } = stores;
   const method = request.method;
 
@@ -183,30 +213,36 @@ async function vaultRoute(
 
       const auth = await vaults.authorizeSnapshot(vaultId, token, seq);
       if (!auth.ok) return errorResponse(auth.status, auth.error);
-      // The declared length is also the cap: a body that runs past it is refused as it streams.
-      let written;
+      const releaseSpace = rd.space.tryReserve(await rd.freeBytes(), length);
+      if (!releaseSpace) return errorResponse(507, "server_full");
       try {
-        written = await snapshots.write(vaultId, seq, request.body, length);
-      } catch (e) {
-        if (e instanceof SnapshotBodyError) return errorResponse(400, "incomplete_body");
-        // The vault was deleted while the body was streaming: its directory is gone.
-        if ((e as NodeJS.ErrnoException).code === "ENOENT") return errorResponse(404, "vault_not_found");
-        throw e; // disk errors: 500 internal_error via the app's error handler
+        // The declared length is also the cap: a body that runs past it is refused as it streams.
+        let written;
+        try {
+          written = await snapshots.write(vaultId, seq, request.body, length);
+        } catch (e) {
+          if (e instanceof SnapshotBodyError) return errorResponse(400, "incomplete_body");
+          // The vault was deleted while the body was streaming: its directory is gone.
+          if ((e as NodeJS.ErrnoException).code === "ENOENT") return errorResponse(404, "vault_not_found");
+          throw e; // disk errors: 500 internal_error via the app's error handler
+        }
+        if (written === "too_large") return errorResponse(413, "snapshot_too_large");
+        if (written.size !== length) {
+          snapshots.remove(vaultId, written.file);
+          return errorResponse(400, "incomplete_body");
+        }
+        const r = await vaults.recordSnapshot(vaultId, token, {
+          file: written.file,
+          seq,
+          size: written.size,
+        });
+        if (!r.ok || r.stale) snapshots.remove(vaultId, written.file);
+        if (!r.ok) return errorResponse(r.status, r.error);
+        if (r.stale) return errorResponse(409, "snapshot_outdated");
+        return json({ seq }, 201);
+      } finally {
+        releaseSpace();
       }
-      if (written === "too_large") return errorResponse(413, "snapshot_too_large");
-      if (written.size !== length) {
-        snapshots.remove(vaultId, written.file);
-        return errorResponse(400, "incomplete_body");
-      }
-      const r = await vaults.recordSnapshot(vaultId, token, {
-        file: written.file,
-        seq,
-        size: written.size,
-      });
-      if (!r.ok || r.stale) snapshots.remove(vaultId, written.file);
-      if (!r.ok) return errorResponse(r.status, r.error);
-      if (r.stale) return errorResponse(409, "snapshot_outdated");
-      return json({ seq }, 201);
     }
     if (method === "GET") {
       const ref = await vaults.latestSnapshot(vaultId, token);

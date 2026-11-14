@@ -96,7 +96,7 @@ describe("startHousekeeping", () => {
         if (id === a.id) throw new Error(`boom ${id}`);
       },
     };
-    const hk = startHousekeeping({ log: (l) => logs.push(l) }, { vaults, mailboxes: t.stores.mailboxes });
+    const hk = startHousekeeping({ log: (l) => logs.push(l) }, { vaults, mailboxes: t.stores.mailboxes, blobs: t.stores.blobs });
     hk.stop();
     seen.length = 0;
     logs.length = 0;
@@ -111,7 +111,7 @@ describe("startHousekeeping", () => {
     const sweep = vi.fn();
     const hk = startHousekeeping(
       { log: () => {} },
-      { vaults: { ...t.stores.vaults, sweep }, mailboxes: t.stores.mailboxes },
+      { vaults: { ...t.stores.vaults, sweep }, mailboxes: t.stores.mailboxes, blobs: t.stores.blobs },
     );
     expect(sweep).toHaveBeenCalledTimes(1);
     hk.runOnce();
