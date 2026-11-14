@@ -25,6 +25,7 @@ import {
   SNAPSHOTS_KEPT,
 } from "./limits.js";
 import type { People } from "./people.js";
+import type { BlobFiles } from "./blob-files.js";
 import type { Snapshots } from "./snapshots.js";
 
 export type IncomingOp = { id: string; ct: Uint8Array };
@@ -126,6 +127,7 @@ export function createVaults(
   clock: Clock,
   people: People,
   snapshots: Snapshots,
+  blobFiles: BlobFiles,
 ): Vaults {
   const q = {
     meta: db.prepare("SELECT * FROM vaults WHERE vault_id = ?"),
@@ -262,6 +264,7 @@ export function createVaults(
   function finishWipe(vaultId: string): void {
     try {
       snapshots.removeVault(vaultId);
+      blobFiles.removeVault(vaultId);
       q.donePendingWipe.run(vaultId);
     } catch {
       // Stays pending; retried by the next housekeep/sweep.

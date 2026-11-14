@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -129,6 +130,23 @@ export function uploadSnapshot(t: TestApp, v: Vault, seq: number, content: strin
 export function snapshotFiles(t: TestApp, v: { id: string }): string[] {
   const dir = join(t.dataDir, "snapshots", v.id);
   return existsSync(dir) ? readdirSync(dir).sort() : [];
+}
+
+export const newBlobId = (): string => randomUUID();
+
+/** Files of the vault's blob directory, temporary ones included. */
+export function blobFiles(t: TestApp, v: { id: string }): string[] {
+  const dir = join(t.dataDir, "blobs", v.id);
+  return existsSync(dir) ? readdirSync(dir).sort() : [];
+}
+
+export function stream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(c) {
+      c.enqueue(bytes);
+      c.close();
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------------------------

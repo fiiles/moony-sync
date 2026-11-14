@@ -12,6 +12,7 @@ import { MAX_INFLIGHT_BODY_BYTES } from "./limits.js";
 import { createMailboxes, type Mailboxes } from "./mailboxes.js";
 import { createPeople, type People } from "./people.js";
 import { clientKey, createLimiters } from "./ratelimit.js";
+import { createBlobFiles, type BlobFiles } from "./blob-files.js";
 import { createSnapshots, type Snapshots } from "./snapshots.js";
 import { createVaults, type Vaults } from "./vaults.js";
 import { syncRoutes } from "./sync-api.js";
@@ -43,6 +44,7 @@ export interface Stores {
   people: People;
   vaults: Vaults;
   snapshots: Snapshots;
+  blobFiles: BlobFiles;
   mailboxes: Mailboxes;
 }
 
@@ -57,12 +59,15 @@ export function createApp(given: Deps): {
   const snapshots = createSnapshots(join(deps.config.dataDir, "snapshots"));
   // An upload that was cut by a crash leaves a ".tmp" file; none of them can still be in flight.
   snapshots.sweepTemp();
+  const blobFiles = createBlobFiles(join(deps.config.dataDir, "blobs"));
+  blobFiles.sweepTemp();
   sweepBackupTemp(deps.config.dataDir);
   const stores: Stores = {
     people,
     snapshots,
+    blobFiles,
     mailboxes: createMailboxes(deps.db, deps.clock),
-    vaults: createVaults(deps.db, deps.clock, people, snapshots),
+    vaults: createVaults(deps.db, deps.clock, people, snapshots, blobFiles),
   };
   const app = new Hono<{ Bindings: AppBindings }>();
 

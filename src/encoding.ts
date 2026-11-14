@@ -5,6 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 const ACCOUNT_RE = /^[0-9]{16}$/;
 const VAULT_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const VAULT_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+const BLOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OP_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export const isAccountNumber = (s: unknown): s is string =>
@@ -13,6 +14,7 @@ export const isVaultId = (s: unknown): s is string => typeof s === "string" && V
 export const isMailboxId = (s: unknown): s is string => typeof s === "string" && VAULT_ID_RE.test(s);
 export const isVaultToken = (s: unknown): s is string =>
   typeof s === "string" && VAULT_TOKEN_RE.test(s);
+export const isBlobId = (s: unknown): s is string => typeof s === "string" && BLOB_ID_RE.test(s);
 export const isOpId = (s: unknown): s is string => typeof s === "string" && OP_ID_RE.test(s);
 
 /** Standard base64 (with padding) → bytes. Returns null on malformed input. */

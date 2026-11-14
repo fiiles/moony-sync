@@ -225,7 +225,7 @@ All optional. Everything else is set on the admin page and stored in the databas
 
 In `DATA_DIR`: `moony-sync.db` (SQLite, WAL mode, with `-wal` and `-shm` files next to it) and a
 `snapshots/` folder. Snapshots are encrypted by the apps; the server keeps the newest two per
-profile. Housekeeping runs once a day inside the server, and every time rule is also checked on
+profile. `DATA_DIR` also has a `blobs/` folder with the encrypted documents and photos. Housekeeping runs once a day inside the server, and every time rule is also checked on
 each request, so a stopped server misses nothing. Uploads stop with "server full" (`507`) when less
 than 1 GiB would remain free on the data volume, and ordinary sync goes on. Details in
 [`DESIGN.md`](DESIGN.md).

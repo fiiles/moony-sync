@@ -45,7 +45,7 @@ function flakyVaults(t: TestApp, n: number) {
       real.removeVault(id);
     },
   };
-  return createVaults(t.db, () => t.clock.now, t.stores.people, snapshots);
+  return createVaults(t.db, () => t.clock.now, t.stores.people, snapshots, t.stores.blobFiles);
 }
 
 describe("housekeeping", () => {

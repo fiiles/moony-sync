@@ -44,10 +44,11 @@ Everything is in `DATA_DIR` (`/data` in the image):
 ```
 moony-sync.db            SQLite, WAL mode (+ moony-sync.db-wal, -shm), foreign keys on
 snapshots/<vault id>/<seq>-<uuid>     snapshot files, up to 100 MiB, the newest two kept per vault
+blobs/<vault id>/<blob id>  attachment files (documents, photos, thumbnails), sealed by the apps, up to 104,883,275 bytes each
 ```
 
 - The database holds the people, vaults (token hash, head, floor, rotation, last activity), ops,
-  previous tokens, rekey bundles, snapshot records, pairing mailboxes and their slots, the admin,
+  previous tokens, rekey bundles, snapshot records, blob records, pairing mailboxes and their slots, the admin,
   admin sessions, backup codes and settings. Deleting a vault row cascades to everything the vault
   owns. Timestamps are unix seconds.
 - Schema changes are numbered, append-only migrations run at start. A server never starts on a
@@ -56,7 +57,8 @@ snapshots/<vault id>/<seq>-<uuid>     snapshot files, up to 100 MiB, the newest 
   and the directory is fsynced; a crash never leaves a half file under a real name. If the
   directory sync fails after the rename the new file is removed again. The record for the file is
   written afterwards; a file without a record is an abandoned upload and housekeeping removes it
-  once it is an hour old.
+  once it is an hour old. Blob uploads are written the same way (temporary name, fsync, rename,
+  directory fsync).
 - Time comes from one injected clock (unix seconds); every time-based rule is enforced at request
   time as well as by housekeeping, so a stopped server misses nothing.
 

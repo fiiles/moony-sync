@@ -32,7 +32,7 @@ export const PREVIOUS_TOKEN_SECONDS = 30 * DAY;
 export const SELF_HOSTED_PAID_UNTIL = 253402300799;
 /** How often the daily housekeeping runs. */
 export const HOUSEKEEPING_INTERVAL_SECONDS = DAY;
-/** A snapshot file with no record this old is an abandoned upload. */
+/** A snapshot or blob file with no record this old is an abandoned upload. */
 export const ORPHAN_SNAPSHOT_AGE_SECONDS = 60 * 60;
 
 /** Pairing mailbox: a slot holds a public key or a sealed credentials blob. */
@@ -58,3 +58,16 @@ export const MAX_MAILBOX_CLIENT_BYTES = 8 * 1024 * 1024;
 export const OP_OVERHEAD_BYTES = 128;
 /** Uploads are refused (507 server_full) when they would leave less than this free on the data volume. */
 export const FREE_SPACE_FLOOR_BYTES = 1024 ** 3;
+
+/** Largest blob content the apps seal: 100 MiB. */
+export const MAX_BLOB_CONTENT_BYTES = 100 * 1024 * 1024;
+/** Largest stored blob: the app's stream format is a 59-byte header plus the content in 64 KiB
+ *  chunks, each chunk (the last one included) carrying a 16-byte tag. = 104,883,275. */
+export const MAX_BLOB_BYTES =
+  MAX_BLOB_CONTENT_BYTES + 59 + 16 * (Math.floor(MAX_BLOB_CONTENT_BYTES / 65536) + 1);
+/** Per-vault blob quota unless the admin changes the `blob_quota_bytes` setting. */
+export const DEFAULT_BLOB_QUOTA_BYTES = 10 * 1024 ** 3;
+export const MAX_BLOB_QUOTA_BYTES = 2 ** 50;
+export const MAX_BLOB_UPLOADS_PER_VAULT = 2;
+export const DEFAULT_BLOB_LIST_LIMIT = 500;
+export const MAX_BLOB_LIST_LIMIT = 1000;

@@ -103,6 +103,14 @@ export const MIGRATIONS: readonly string[] = [
   // 5: who wrote a pairing slot, as a SHA-256 of the client key (never the address), so one
   // client's share of the slots can be capped. Cleared when the slot is read or burnt.
   `ALTER TABLE mailbox_slots ADD COLUMN client TEXT`,
+  // 6: blob (attachment) records; contents in blobs/<vault id>/<blob id>.
+  `CREATE TABLE blobs (
+    vault_id TEXT NOT NULL REFERENCES vaults (vault_id) ON DELETE CASCADE,
+    blob_id TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (vault_id, blob_id)
+  )`,
 ];
 
 /** Opens (creating it if needed) the database in `dataDir`, migrates it to the current
