@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import { api } from "../api";
 import { useAction } from "../hooks";
 import { useI18n } from "../i18n";
@@ -17,6 +17,7 @@ export function EnrolFlow({ forced, onFinished, onCodesShown, onConfirming }: { 
   const [step, setStep] = useState<Step>({ name: "password" });
   const [password, setPassword] = useState("");
   const [totp, setTotp] = useState("");
+  const confirmingRef = useRef(false);
 
   const start = async (e: Event) => {
     e.preventDefault();
@@ -28,9 +29,13 @@ export function EnrolFlow({ forced, onFinished, onCodesShown, onConfirming }: { 
   };
   const confirm = async (e: Event) => {
     e.preventDefault();
+    // A second submit while the first request runs is skipped by run(): it must change nothing.
+    if (confirmingRef.current) return;
+    confirmingRef.current = true;
     // From here on the factor may be on already: the dialog must not close before the codes.
     onConfirming?.(true);
     const r = await run(() => api.confirmTotp(totp.trim()));
+    confirmingRef.current = false;
     if (!r.ok) onConfirming?.(false);
     if (r.ok) {
       setTotp("");

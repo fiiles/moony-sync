@@ -522,6 +522,40 @@ describe("backup codes cannot be dismissed", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  it("a second submit of the confirm form while the first runs does not unlock the dialog", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let confirms = 0;
+    installMock({
+      "GET state": () => ({ json: loggedIn }),
+      "GET overview": () => ({ json: overviewBody() }),
+      "POST 2fa/enrol": () => ({ json: { secret: "JBSWY3DPEHPK3PXP", otpauthUrl: "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP" } }),
+      "POST 2fa/confirm": async () => {
+        confirms += 1;
+        await gate;
+        return { json: { backupCodes: ["AAAAAAAAAA"] } };
+      },
+    });
+    openApp("/settings");
+    await screen.findByRole("heading", { name: "Settings" });
+    fireEvent.click(screen.getByRole("button", { name: "Set up second factor" }));
+    const dialog = await screen.findByRole("dialog");
+    type("Password", "pw-pw-pw-pw-pw");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Start" }));
+    await within(dialog).findByTestId("totp-secret");
+    type("6-digit code from the app", "123456");
+    const form = within(dialog).getByRole("button", { name: "Confirm" }).closest("form")!;
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    await new Promise((r) => setTimeout(r, 20));
+    expect((within(dialog).getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    release();
+    await within(dialog).findByTestId("backup-codes");
+    expect(confirms).toBe(1);
+  });
+
   it("in the forced enrolment the log out link is gone once the codes are shown", async () => {
     installMock({
       "GET state": () => ({ json: { ...loggedIn, require2fa: true, mustEnrol2fa: true } }),
