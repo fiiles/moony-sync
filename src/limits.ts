@@ -76,7 +76,11 @@ export const MAX_BLOB_LIST_LIMIT = 1000;
 export const MAX_KIT_ENVELOPE_BYTES = 256 * 1024;
 /** Replaced Kit tokens a vault remembers (so they answer 410 kit_replaced); the oldest go first. */
 export const MAX_KIT_RETIRED_KEPT = 256;
-/** GET /kit calls per client key and minute. */
-export const KIT_READS_PER_MINUTE = 10;
-/** Failed GET /kit attempts (401, 410) per vault and hour; a right token is never refused by it. */
+/** GET /kit calls per client key and minute, counted before the token is looked at: a generous
+ *  backstop only, since behind a proxy without TRUST_PROXY every client shares one key. */
+export const KIT_READS_PER_MINUTE = 120;
+/** Failed GET /kit attempts (401, 404; never 410) per client key and minute; a right token is
+ *  never refused by it. */
+export const KIT_CLIENT_FAILURES_PER_MINUTE = 10;
+/** Failed GET /kit attempts (401 only) per vault and hour; a right token is never refused by it. */
 export const KIT_VAULT_FAILURES_PER_HOUR = 30;

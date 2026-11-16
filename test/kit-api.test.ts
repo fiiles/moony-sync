@@ -260,16 +260,55 @@ describe("GET /v1/vaults/:id/kit", () => {
     expect(await lapsed.json()).toEqual({ error: "payment_required" });
   });
 
-  it("kitRead: 10 a minute per client address, before the token check", async () => {
+  it("per client, only failures count: junk and token-less calls never make the right token fail", async () => {
     const t = testApp();
     const { v, kit } = await vaultWithKit(t);
-    for (let i = 0; i < 10; i++) expect((await getKit(t, v.id, newToken(), "198.51.100.7")).status).toBe(401);
-    const limited = await getKit(t, v.id, kit, "198.51.100.7");
+    const ip = "198.51.100.7";
+    const statuses: number[] = [];
+    for (let i = 0; i < 25; i++) {
+      statuses.push((await getKit(t, v.id, newToken(), ip)).status);
+      statuses.push((await t.call("GET", `/v1/vaults/${v.id}/kit`, { clientAddress: ip })).status);
+      statuses.push(
+        (await t.call("GET", `/v1/vaults/${v.id}/kit`, { headers: { authorization: "Bearer junk!" }, clientAddress: ip }))
+          .status,
+      );
+      statuses.push((await getKit(t, newVaultId(), newToken(), ip)).status);
+    }
+    // Ten failures a minute per client, then failures answer 429.
+    expect(statuses.slice(0, 10).every((s) => s === 401 || s === 404)).toBe(true);
+    expect(statuses.slice(10).every((s) => s === 429)).toBe(true);
+    const r = await getKit(t, v.id, kit, ip);
+    expect(r.status).toBe(200);
+  });
+
+  it("kitRead: a backstop of 120 a minute per client, counting every call before the token", async () => {
+    const t = testApp();
+    const { v, kit } = await vaultWithKit(t);
+    const ip = "198.51.100.9";
+    for (let i = 0; i < 120; i++) expect((await getKit(t, v.id, kit, ip)).status).toBe(200);
+    const limited = await getKit(t, v.id, kit, ip);
     expect(limited.status).toBe(429);
     expect(await limited.json()).toEqual({ error: "rate_limited" });
-    expect((await getKit(t, v.id, kit, "198.51.100.8")).status).toBe(200);
+    expect((await getKit(t, v.id, kit, "198.51.100.10")).status).toBe(200);
     t.clock.now += 60;
-    expect((await getKit(t, v.id, kit, "198.51.100.7")).status).toBe(200);
+    expect((await getKit(t, v.id, kit, ip)).status).toBe(200);
+  });
+
+  it("a wrong token gets 429 after 30 failures in the hour, from one client over several minutes", async () => {
+    const t = testApp();
+    const { v, kit } = await vaultWithKit(t);
+    t.clock.now -= t.clock.now % 3600; // the start of an hour window
+    const ip = "198.51.100.11";
+    for (let minute = 0; minute < 3; minute++) {
+      for (let i = 0; i < 10; i++) expect((await getKit(t, v.id, newToken(), ip)).status).toBe(401);
+      t.clock.now += 60;
+    }
+    const over = await getKit(t, v.id, newToken(), ip);
+    expect(over.status).toBe(429);
+    expect(await over.json()).toEqual({ error: "rate_limited" });
+    expect((await getKit(t, v.id, kit, ip)).status).toBe(200);
+    t.clock.now += 3600;
+    expect((await getKit(t, v.id, newToken(), ip)).status).toBe(401);
   });
 
   it("the per-vault limit counts only failures: 100 wrong tokens, then the right token still reads", async () => {
@@ -291,14 +330,18 @@ describe("GET /v1/vaults/:id/kit", () => {
     expect((await getKit(t, v.id, newToken(), "203.0.113.202")).status).toBe(401);
   });
 
-  it("retired-token attempts count as failures too", async () => {
+  it("a replaced Kit always reads 410: it is not counted and never turned into 429", async () => {
     const t = testApp();
     const { v, kit } = await vaultWithKit(t);
     const newKit = newToken();
     expect((await rotate(t, v, { token: newToken(), kit: { envelope: b64("n"), token: newKit } })).status).toBe(200);
-    for (let i = 0; i < 30; i++) expect((await getKit(t, v.id, kit, `203.0.113.${i}`)).status).toBe(410);
-    expect((await getKit(t, v.id, kit, "203.0.113.99")).status).toBe(429);
-    expect((await getKit(t, v.id, newKit, "203.0.113.98")).status).toBe(200);
+    const ip = "203.0.113.50";
+    for (let i = 0; i < 60; i++) expect((await getKit(t, v.id, kit, ip)).status).toBe(410);
+    // Neither the client's nor the vault's failure budget was used.
+    for (let i = 0; i < 10; i++) expect((await getKit(t, v.id, newToken(), ip)).status).toBe(401);
+    expect((await getKit(t, v.id, newToken(), ip)).status).toBe(429);
+    expect((await getKit(t, v.id, kit, ip)).status).toBe(410);
+    expect((await getKit(t, v.id, newKit, ip)).status).toBe(200);
   });
 });
 
@@ -419,6 +462,30 @@ describe("POST /v1/vaults/:id/token with a Kit", () => {
     expect((await infoOf(t, v)).rotation).toBe(0);
   });
 
+  it("a previous (read-only) vault token cannot rotate with a kit", async () => {
+    const t = testApp();
+    const { v, kit } = await vaultWithKit(t, "kept");
+    const t1 = newToken();
+    expect((await rotate(t, v, { token: t1, kit: { envelope: b64("e1") } })).status).toBe(200);
+    for (const kitPart of [{ envelope: b64("x") }, { envelope: b64("x"), token: newToken() }]) {
+      const r = await rotate(t, v, { token: newToken(), kit: kitPart });
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: "token_read_only" });
+    }
+    expect(unb64(((await (await getKit(t, v.id, kit)).json()) as KitBody).envelope)).toBe("e1");
+  });
+
+  it("refuses a kit.token equal to the new vault token", async () => {
+    const t = testApp();
+    const { v, kit } = await vaultWithKit(t);
+    const same = newToken();
+    const r = await rotate(t, v, { token: same, kit: { envelope: b64("e"), token: same } });
+    expect(r.status).toBe(400);
+    expect(await r.json()).toEqual({ error: "invalid_kit_token" });
+    expect((await infoOf(t, v)).rotation).toBe(0);
+    expect((await getKit(t, v.id, kit)).status).toBe(200);
+  });
+
   it("a retired Kit token can never become the vault token", async () => {
     const t = testApp();
     const { v, kit } = await vaultWithKit(t);
@@ -452,6 +519,40 @@ describe("POST /v1/vaults/:id/token with a Kit", () => {
     expect((await getKit(t, v.id, old[0]!, "192.0.2.11")).status).toBe(401);
     expect((await getKit(t, v.id, old[1]!, "192.0.2.12")).status).toBe(410);
     expect((await getKit(t, v.id, kit, "192.0.2.13")).status).toBe(410);
+  });
+});
+
+describe("envelope bytes", () => {
+  it("come back byte for byte, in the same canonical base64", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const kit = newToken();
+    const sizes = [1, 2, 3, 4, 5, 255, 256, 257, 256 * 1024];
+    let first = true;
+    for (const size of sizes) {
+      const bytes = crypto.getRandomValues(new Uint8Array(Math.min(size, 65536)));
+      const full = new Uint8Array(size);
+      for (let i = 0; i < size; i += bytes.length) full.set(bytes.subarray(0, Math.min(bytes.length, size - i)), i);
+      full[0] = 0x00;
+      full[size - 1] = 0xff;
+      const envelope = Buffer.from(full).toString("base64");
+      const put = await putKit(t, v, { token: kit, envelope });
+      expect(put.status).toBe(first ? 201 : 200);
+      first = false;
+      const got = (await (await getKit(t, v.id, kit, `192.0.2.${size % 250}`)).json()) as KitBody;
+      expect(got.envelope).toBe(envelope);
+      expect(Buffer.from(got.envelope, "base64").equals(Buffer.from(full))).toBe(true);
+      expect(Buffer.from(row(t, v.id)!.envelope).equals(Buffer.from(full))).toBe(true);
+    }
+  });
+
+  it("accepts non-canonical padding bits and answers the canonical encoding of the same bytes", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const kit = newToken();
+    // "YR==" and "YQ==" both decode to "a"; the stored bytes are what count.
+    expect((await putKit(t, v, { token: kit, envelope: "YR==" })).status).toBe(201);
+    expect(((await (await getKit(t, v.id, kit)).json()) as KitBody).envelope).toBe("YQ==");
   });
 });
 

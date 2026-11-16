@@ -150,11 +150,15 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
   // through vault creation); then per vault + token, so junk tokens cannot use up a real
   // vault's quota.
   if (limiters.vaultIp.hit(caller)) return err(429, "rate_limited");
-  // Kit reads have their own, much lower, per-client limit, before the token is looked at.
+  // Kit reads: a generous per-client backstop before the token is looked at. The tight limits
+  // count failures only (below), so nobody without the Kit can make the right token fail.
   const kitRead = sub === "/kit" && request.method === "GET";
   if (kitRead && limiters.kitRead.hit(caller)) return errorResponse(429, "rate_limited");
   const token = bearer(request);
-  if (!token) return err(401, "unauthorized");
+  if (!token) {
+    if (kitRead && limiters.kitClientFailures.hit(caller)) return errorResponse(429, "rate_limited");
+    return err(401, "unauthorized");
+  }
   if (limiters.vault.hit(tokenKey(vaultId, token))) return err(429, "rate_limited");
   if (isBlob) {
     try {
@@ -309,11 +313,15 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
       // The bearer is the Kit token here, checked against the Kit only.
       const r = stores.kits.read(vaultId, token);
       if (r.ok) return json({ envelope: r.envelope, since: r.since, updatedAt: r.updatedAt });
-      // Only failures count per vault, so whoever lacks the Kit cannot lock its holder out.
-      if ((r.status === 401 || r.status === 410) && limiters.kitVaultFailures.hit(vaultId)) {
-        return errorResponse(429, "rate_limited");
-      }
+      // A replaced Kit always hears that it was replaced; it is neither counted nor hidden.
       if ("replacedAt" in r) return json({ error: r.error, replacedAt: r.replacedAt }, r.status);
+      // Only failures count, per client and (for a wrong token) per vault, so whoever lacks the
+      // Kit cannot lock its holder out. Both are counted before either refuses.
+      if (r.status === 401 || r.status === 404) {
+        const clientOver = limiters.kitClientFailures.hit(caller);
+        const vaultOver = r.status === 401 && limiters.kitVaultFailures.hit(vaultId);
+        if (clientOver || vaultOver) return errorResponse(429, "rate_limited");
+      }
       return errorResponse(r.status, r.error);
     }
   }

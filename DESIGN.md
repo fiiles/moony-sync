@@ -310,12 +310,13 @@ printed on the Kit, and at every key change seals all vault keys into an **envel
 The server keeps one Kit per vault: the SHA-256 of the Kit token and the envelope, as opaque bytes.
 The Kit token reads the envelope and nothing else; a vault token never reads it, and a Kit token is
 never accepted as a vault token. Envelopes are padded standard base64 in JSON, 1 byte to 256 KiB
-decoded.
+decoded. The server stores the decoded bytes and answers them in canonical base64: an upload with
+non-zero padding bits (`YR==`) is accepted and comes back canonical (`YQ==`), the same bytes.
 
 | Method | Path | Notes |
 |---|---|---|
 | `PUT` | `/v1/vaults/:vaultId/kit` | Sets the Kit up. The **current** vault token authorises (`401 unauthorized`, `403 token_read_only` for a previous one, `404 vault_not_found`); no entitlement needed. Judged before the body is read. Body `{"token": "<43-char Kit token>", "envelope": "<base64>"}`, at most 384 KiB. No Kit yet → `201 {"created": true}`; the same Kit token again → the envelope is replaced, `200 {"created": false}` (a retried setup). Another token while a Kit exists → `409 kit_exists` (a Kit is replaced only by a rotation). `400 invalid_kit_token` when the token is not 43 base64url characters, or is the current vault token, a previous vault token the server still remembers (any age), or a replaced Kit token; `400 invalid_kit` for a missing, empty or malformed envelope; `413 kit_too_large` over 256 KiB decoded. |
-| `GET` | `/v1/vaults/:vaultId/kit` | `Authorization: Bearer <Kit token>`, checked only against the vault's Kit. → `200 {"envelope": "<base64>", "since": <unix s>, "updatedAt": <unix s>}` and the minute of the read is recorded (`kit.lastRead` in vault info). It does not change the vault's last activity. A replaced Kit token (one of the newest 256) → `410 {"error": "kit_replaced", "replacedAt": <unix s>}`. Any other token, a vault token included, or a vault without a Kit → `401 unauthorized`; unknown vault → `404 vault_not_found`. Entitlement: the read rule (until 30 days after `paidUntil`, else `402 payment_required`, judged after the token). Limits: `429 rate_limited` past 10 calls a minute per client (counted before the token is looked at), and past 30 **failed** attempts (`401`, `410`) an hour per vault, at which point further failed attempts answer `429` while the right Kit token still reads. |
+| `GET` | `/v1/vaults/:vaultId/kit` | `Authorization: Bearer <Kit token>`, checked only against the vault's Kit. → `200 {"envelope": "<base64>", "since": <unix s>, "updatedAt": <unix s>}` and the minute of the read is recorded (`kit.lastRead` in vault info). It does not change the vault's last activity. A replaced Kit token (one of the newest 256) → `410 {"error": "kit_replaced", "replacedAt": <unix s>}`. Any other token, a vault token included, or a vault without a Kit → `401 unauthorized`; unknown vault → `404 vault_not_found`. Entitlement: the read rule (until 30 days after `paidUntil`, else `402 payment_required`, judged after the token). Limits, all `429 rate_limited`: a backstop of 120 calls a minute per client, counted before the token is looked at; 10 **failed** calls a minute per client (`401` including a missing or malformed bearer, and `404`); 30 **failed** calls an hour per vault (`401` only). Past a failure limit only further failures answer `429`: the right Kit token still reads. A `410` is never counted by the failure limits and never turned into `429`. |
 
 The `kit` of a rotation (`POST /token`): the envelope replaces the stored one (`updatedAt` = now,
 `since` and `lastRead` unchanged). With `token` the Kit is **replaced**: the old Kit token's hash moves
@@ -328,7 +329,9 @@ token, the current or a remembered previous vault token, the current Kit token o
 missing, empty or malformed, `413 kit_too_large` over 256 KiB. The vault token, the rekey bundle,
 the envelope and the Kit token change in one transaction: a refused rotation (any status) leaves
 the Kit as it was. The replaced list keeps the newest 256 hashes per vault; an older Kit token
-answers `401`. Deleting the vault or the person deletes the Kit and its replaced hashes.
+answers `401`, and since the server no longer remembers it, it would also be accepted again as a
+new Kit token (`PUT /kit` on a vault without a Kit, or a rotation's `kit.token`). Kit tokens come
+from a random 256-bit seed, so that happens only if a client deliberately re-uses one. Deleting the vault or the person deletes the Kit and its replaced hashes.
 
 ### Blobs (attachments)
 
@@ -398,9 +401,11 @@ the table at start and in each minute sweep.
 In-memory fixed windows of one minute, per process (they reset at a restart): account lookups
 (and vault creation, which could probe account numbers) 60/min per client, vault calls 1200/min
 per client and 600/min per vault + token, pairing mailbox calls 120/min per client. Kit reads
-(`GET /kit`) 10/min per client on top of the vault limits, and 30 failed Kit reads (`401`, `410`)
-per hour per vault; successful reads are never counted there, so nobody without the Kit (a
-removed device included) can lock its holder out of recovery. Admin guessing
+(`GET /kit`) on top of the vault limits: 120/min per client as a backstop for every call, and
+for failures only 10/min per client (`401`, `404`) and 30/hour per vault (`401`). Successful reads
+are never counted by the failure limits, so nobody without the Kit (a removed device included,
+or every client sharing one key behind a proxy without `TRUST_PROXY`) can make the right Kit
+token fail, short of the 120/min backstop. Admin guessing
 limits are under *Authentication*. A client address is keyed as itself (IPv4), as the IPv4 for an
 IPv4-mapped IPv6 address, and by its /64 prefix for any other IPv6 address. Request bodies are
 read with a running byte count, so a missing or lying `Content-Length` cannot make the server
@@ -455,8 +460,8 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Rekey bundle | 256 KiB decoded, 32 kept per vault |
 | Kit envelope | 256 KiB decoded, one per vault |
 | Replaced Kit tokens remembered | 256 per vault (the newest), then `401` instead of `410` |
-| Kit reads | 10 per minute per client key |
-| Failed Kit reads | 30 per hour per vault (`401`/`410` only), then `429` for failures; the right Kit token always reads |
+| Kit reads | 120 per minute per client key (every call, before the token) |
+| Failed Kit reads | 10 per minute per client key (`401`, `404`) and 30 per hour per vault (`401`), then `429` for failures only; `410` is not counted |
 | Rotation body / Kit setup body | 768 KiB / 384 KiB |
 | Previous token (read-only) and rekey bundle | 30 days after the rotation |
 | Read grace after a block | 30 days |
@@ -512,10 +517,13 @@ Choices made where the phase-5 revision spec (§2.9) left the relay open:
    `invalid_kit`, `kit_too_large`, `invalid_kit_token` for a malformed token), then in the
    transaction: the vault token's role, `invalid_token`, `kit_required`, `invalid_kit` (envelope with
    no Kit), `invalid_kit_token` (conflicts), `too_many_rotations`.
-6. `GET /kit` order: `invalid_vault_id`, the vault limits per client, `kitRead`, a missing bearer
-   (`401`, not counted per vault), the per vault + token limit, `404`, then the Kit token
-   (`401`/`410`, counted per vault; past 30 an hour these answer `429`), then entitlement (`402`).
-   Attempts on an unknown vault are not counted per vault.
+6. `GET /kit` order: `invalid_vault_id`, the vault limits per client, `kitRead` (backstop), a
+   missing or malformed bearer (`401`, counted per client), the per vault + token limit, `404`
+   (counted per client), then the Kit token: `410` as it is, `401` counted per client and per vault
+   (both counted before either refuses), then entitlement (`402`). After the review of Task 11 the
+   spec's `kitRead` (10/min of every call) became a 120/min backstop plus 10/min of failures per
+   client, and `410` left the per-vault count, so a shared proxy key cannot block recovery and a
+   replaced Kit always hears `kit_replaced`.
 7. The replaced Kit hashes are trimmed to 256 in the rotation's transaction, not by housekeeping;
    housekeeping has nothing to do for Kits (deletion cascades).
 8. A Kit envelope is not counted in a vault's `bytes` or the admin's space figures (at most 256 KiB
