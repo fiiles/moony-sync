@@ -11,6 +11,7 @@ export const en = {
   "common.copy": "Copy",
   "common.copied": "Copied",
   "common.copyManual": "Select the text and copy it manually",
+  "common.refresh": "Refresh",
   "common.retry": "Try again",
   "common.loading": "Loading",
   "common.never": "No activity yet",

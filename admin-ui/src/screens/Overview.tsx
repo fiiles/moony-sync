@@ -4,14 +4,14 @@ import { CopyButton } from "../components/CopyButton";
 import { ErrorNote } from "../components/ErrorNote";
 import { Field } from "../components/Field";
 import { Icon } from "../components/Icon";
-import { LastActivity, LoadError, PageHead, PageSkeleton, Size } from "../components/bits";
+import { LastActivity, LoadError, PageHead, PageSkeleton, RefreshButton, Size } from "../components/bits";
 import { errorMessage, useAction, useResource } from "../hooks";
 import { useI18n } from "../i18n";
 import { formatBytes } from "../format";
 
 export function Overview() {
   const { t, lang } = useI18n();
-  const res = useResource(() => api.overview());
+  const res = useResource(() => api.overview(), [], { refreshEveryMs: 30_000, refreshOnFocus: true });
   const { busy, error, run } = useAction();
   const [suggestion, setSuggestion] = useState<string | null>(null);
 
@@ -28,7 +28,7 @@ export function Overview() {
 
   return (
     <>
-      <PageHead eyebrow={t("overview.eyebrow")} title={t("overview.title")} lead={t("overview.lead")} />
+      <PageHead eyebrow={t("overview.eyebrow")} title={t("overview.title")} lead={t("overview.lead")} actions={<RefreshButton busy={res.refreshing} onClick={() => void res.refresh()} />} />
 
       {o.insecure ? (
         <div class="alert note">
