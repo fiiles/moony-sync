@@ -12,6 +12,7 @@ export const cs: Record<Key, string> = {
   "common.copy": "Kopírovat",
   "common.copied": "Zkopírováno",
   "common.copyManual": "Označte text a zkopírujte ho ručně",
+  "common.refresh": "Obnovit",
   "common.retry": "Zkusit znovu",
   "common.loading": "Načítání",
   "common.never": "Zatím bez aktivity",

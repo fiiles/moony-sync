@@ -2,7 +2,7 @@ import { useState } from "preact/hooks";
 import { api, type Person } from "../api";
 import { Icon } from "../components/Icon";
 import { ErrorNote } from "../components/ErrorNote";
-import { LastActivity, LoadError, PageHead, PageSkeleton, Size } from "../components/bits";
+import { LastActivity, LoadError, PageHead, PageSkeleton, RefreshButton, Size } from "../components/bits";
 import { PersonActions } from "../components/PersonActions";
 import { AddPersonModal, PersonDialogs, unblock, type PersonDialog } from "../components/PersonModals";
 import { StateBadge } from "../components/StateBadge";
@@ -12,7 +12,7 @@ import { Link } from "../router";
 
 export function People() {
   const { t } = useI18n();
-  const res = useResource(() => api.people());
+  const res = useResource(() => api.people(), [], { refreshEveryMs: 30_000, refreshOnFocus: true });
   const [adding, setAdding] = useState(false);
   const [dialog, setDialog] = useState<PersonDialog | null>(null);
   const action = useAction();
@@ -30,7 +30,12 @@ export function People() {
 
   return (
     <>
-      <PageHead eyebrow={t("people.eyebrow")} title={t("people.title")} lead={t("people.lead")} actions={list.length > 0 ? addButton : undefined} />
+      <PageHead eyebrow={t("people.eyebrow")} title={t("people.title")} lead={t("people.lead")} actions={
+          <>
+            <RefreshButton busy={res.refreshing} onClick={() => void res.refresh()} />
+            {list.length > 0 ? addButton : null}
+          </>
+        } />
       <ErrorNote error={action.error} />
 
       {list.length === 0 ? (

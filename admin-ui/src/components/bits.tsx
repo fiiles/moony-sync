@@ -1,6 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { formatBytes, formatDateTime, formatRelative } from "../format";
 import { useI18n } from "../i18n";
+import { Icon } from "./Icon";
 
 export function PageHead({ eyebrow, title, lead, actions }: { eyebrow: string; title: string; lead?: string; actions?: ComponentChildren }) {
   return (
@@ -53,5 +54,16 @@ export function LoadError({ message, onRetry }: { message: string; onRetry(): vo
         </button>
       </div>
     </div>
+  );
+}
+
+/** Fetches the page's data again; busy while it runs. */
+export function RefreshButton({ busy, onClick }: { busy: boolean; onClick(): void }) {
+  const { t } = useI18n();
+  return (
+    <button type="button" class={busy ? "btn is-loading" : "btn"} aria-busy={busy} onClick={onClick}>
+      <Icon name="refresh" />
+      {t("common.refresh")}
+    </button>
   );
 }

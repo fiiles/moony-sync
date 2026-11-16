@@ -731,3 +731,27 @@ describe("backup download", () => {
     expect(started).toHaveLength(1);
   });
 });
+
+describe("refresh button", () => {
+  it("the overview shows new figures after Refresh without a reload", async () => {
+    let profiles = 0;
+    installMock({
+      "GET state": () => ({ json: loggedIn }),
+      "GET overview": () => ({ json: overviewBody({ profiles }) }),
+    });
+    openApp("/");
+    await screen.findByRole("heading", { name: "Overview" });
+    profiles = 5;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByText("5")).toBeTruthy());
+  });
+
+  it("People has a Refresh button and Czech label", async () => {
+    installMock({
+      "GET state": () => ({ json: loggedIn }),
+      "GET people": () => ({ json: [person()] }),
+    });
+    openApp("/people", "cs");
+    await screen.findByRole("button", { name: "Obnovit" });
+  });
+});
