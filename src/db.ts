@@ -111,6 +111,23 @@ export const MIGRATIONS: readonly string[] = [
     created_at INTEGER NOT NULL,
     PRIMARY KEY (vault_id, blob_id)
   )`,
+  // 7: the Recovery Kit. One Kit per vault: the SHA-256 of its token (never the token) and the
+  // envelope the apps seal to it (opaque). Replaced Kit tokens are remembered as hashes, the
+  // newest 256 per vault, so they can answer "replaced" instead of "unknown".
+  `CREATE TABLE kits (
+    vault_id TEXT PRIMARY KEY REFERENCES vaults (vault_id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL,
+    envelope BLOB NOT NULL,
+    since INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_read INTEGER
+  );
+  CREATE TABLE kits_retired (
+    vault_id TEXT NOT NULL REFERENCES vaults (vault_id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL,
+    retired_at INTEGER NOT NULL,
+    PRIMARY KEY (vault_id, token_hash)
+  )`,
 ];
 
 /** Opens (creating it if needed) the database in `dataDir`, migrates it to the current

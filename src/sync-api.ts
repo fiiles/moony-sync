@@ -30,8 +30,9 @@ import {
   MAX_SNAPSHOT_BYTES,
 } from "./limits.js";
 import { clientKey, tokenKey, type Limiters } from "./ratelimit.js";
+import { parseEnvelope } from "./kits.js";
 import { SnapshotBodyError } from "./snapshots.js";
-import type { IncomingOp } from "./vaults.js";
+import type { IncomingOp, KitUpdate } from "./vaults.js";
 
 type Env = { Bindings: AppBindings };
 
@@ -79,10 +80,13 @@ export function syncRoutes(deps: AppDeps, stores: Stores, limiters: Limiters, bu
   return r;
 }
 
-/** Token + rekey bundle: base64 of 256 KiB is ~342 KiB, plus the JSON around it. */
-const MAX_ROTATE_BODY_BYTES = 512 * 1024;
+/** Token + rekey bundle + Kit envelope (+ Kit token): two times base64 of 256 KiB is ~683 KiB,
+ *  plus the JSON around it. */
+const MAX_ROTATE_BODY_BYTES = 768 * 1024;
+/** Kit token + envelope: base64 of 256 KiB is ~342 KiB, plus the JSON around it. */
+const MAX_KIT_BODY_BYTES = 384 * 1024;
 const PAIRING_PATH = /^\/v1\/pairing\/([^/]+)(?:\/([^/]+))?$/;
-const VAULT_PATH = /^\/v1\/vaults\/([^/]+)(\/ops|\/snapshot|\/token|\/rekey|\/blobs(?:\/([^/]+))?)?$/;
+const VAULT_PATH = /^\/v1\/vaults\/([^/]+)(\/ops|\/snapshot|\/token|\/rekey|\/kit|\/blobs(?:\/([^/]+))?)?$/;
 
 function bearer(request: Request): string | null {
   const h = request.headers.get("authorization") ?? "";
@@ -146,6 +150,9 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
   // through vault creation); then per vault + token, so junk tokens cannot use up a real
   // vault's quota.
   if (limiters.vaultIp.hit(caller)) return err(429, "rate_limited");
+  // Kit reads have their own, much lower, per-client limit, before the token is looked at.
+  const kitRead = sub === "/kit" && request.method === "GET";
+  if (kitRead && limiters.kitRead.hit(caller)) return errorResponse(429, "rate_limited");
   const token = bearer(request);
   if (!token) return err(401, "unauthorized");
   if (limiters.vault.hit(tokenKey(vaultId, token))) return err(429, "rate_limited");
@@ -265,7 +272,7 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
     if (!allowed.ok) return errorResponse(allowed.status, allowed.error);
     const body = await readJson(request, MAX_ROTATE_BODY_BYTES, { budget, client: caller });
     if ("error" in body) return errorResponse(body.status, body.error);
-    const { token: next, rekey } = (body.value ?? {}) as { token?: unknown; rekey?: unknown };
+    const { token: next, rekey, kit } = (body.value ?? {}) as { token?: unknown; rekey?: unknown; kit?: unknown };
     if (!isVaultToken(next)) return errorResponse(400, "invalid_token");
     if (typeof rekey !== "string" || rekey.length === 0) return errorResponse(400, "invalid_rekey");
     // Size first, from the string alone: nothing oversized gets decoded.
@@ -273,7 +280,42 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
     if (base64DecodedLength(rekey) > MAX_REKEY_BYTES) return errorResponse(413, "rekey_too_large");
     const bytes = decodeBase64(rekey);
     if (!bytes || bytes.length === 0) return errorResponse(400, "invalid_rekey");
-    return fromResult(await vaults.rotateToken(vaultId, token, next, bytes));
+    let kitUpdate: KitUpdate | undefined;
+    if (kit !== undefined) {
+      const parsed = parseKitUpdate(kit);
+      if ("error" in parsed) return errorResponse(parsed.status, parsed.error);
+      kitUpdate = parsed;
+    }
+    return fromResult(await vaults.rotateToken(vaultId, token, next, bytes, kitUpdate));
+  }
+
+  if (sub === "/kit") {
+    if (method === "PUT") {
+      // Judged by the vault token before a single body byte is read, like /token.
+      const allowed = vaults.check(vaultId, token, "owner");
+      if (!allowed.ok) return errorResponse(allowed.status, allowed.error);
+      const body = await readJson(request, MAX_KIT_BODY_BYTES, { budget, client: caller });
+      if ("error" in body) return errorResponse(body.status, body.error);
+      const { token: kitToken, envelope } = (body.value ?? {}) as { token?: unknown; envelope?: unknown };
+      if (!isVaultToken(kitToken)) return errorResponse(400, "invalid_kit_token");
+      const sealed = parseEnvelope(envelope);
+      if (sealed === "invalid") return errorResponse(400, "invalid_kit");
+      if (sealed === "too_large") return errorResponse(413, "kit_too_large");
+      const r = stores.kits.put(vaultId, token, kitToken, sealed);
+      if (!r.ok) return errorResponse(r.status, r.error);
+      return json({ created: r.created }, r.created ? 201 : 200);
+    }
+    if (method === "GET") {
+      // The bearer is the Kit token here, checked against the Kit only.
+      const r = stores.kits.read(vaultId, token);
+      if (r.ok) return json({ envelope: r.envelope, since: r.since, updatedAt: r.updatedAt });
+      // Only failures count per vault, so whoever lacks the Kit cannot lock its holder out.
+      if ((r.status === 401 || r.status === 410) && limiters.kitVaultFailures.hit(vaultId)) {
+        return errorResponse(429, "rate_limited");
+      }
+      if ("replacedAt" in r) return json({ error: r.error, replacedAt: r.replacedAt }, r.status);
+      return errorResponse(r.status, r.error);
+    }
   }
 
   if (sub === "/rekey" && method === "GET") {
@@ -283,6 +325,20 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
   }
 
   return errorResponse(405, "method_not_allowed");
+}
+
+/** The `kit` of a rotation: `{envelope, token?}`. */
+function parseKitUpdate(value: unknown): KitUpdate | { status: number; error: string } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { status: 400, error: "invalid_kit" };
+  }
+  const { envelope, token } = value as { envelope?: unknown; token?: unknown };
+  const sealed = parseEnvelope(envelope);
+  if (sealed === "invalid") return { status: 400, error: "invalid_kit" };
+  if (sealed === "too_large") return { status: 413, error: "kit_too_large" };
+  if (token === undefined) return { envelope: sealed };
+  if (!isVaultToken(token)) return { status: 400, error: "invalid_kit_token" };
+  return { envelope: sealed, token };
 }
 
 function accountOf(request: Request): string | null {

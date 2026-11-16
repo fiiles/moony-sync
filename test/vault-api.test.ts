@@ -256,6 +256,7 @@ describe("entitlement", () => {
       paidUntil: 253402300799,
       bytes: 0,
       rotation: 0,
+      kit: null,
     });
   });
 });
