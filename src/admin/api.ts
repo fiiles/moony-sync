@@ -248,7 +248,15 @@ export function adminRoutes(deps: AppDeps, stores: Stores, auth: Auth, budget: B
       ...personView(p, vaults),
       vaults: vaults
         .filter((v) => v.account === p.account)
-        .map((v) => ({ id: v.vaultId, shortId: v.vaultId.slice(0, 6), bytes: v.bytes, files: v.files, lastActivity: v.lastActivity })),
+        .map((v) => ({
+          id: v.vaultId,
+          shortId: v.vaultId.slice(0, 6),
+          bytes: v.bytes,
+          files: v.files,
+          lastActivity: v.lastActivity,
+          kitSince: v.kitSince,
+          kitLastRead: v.kitLastRead,
+        })),
     });
   });
 

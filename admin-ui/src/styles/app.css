@@ -61,7 +61,9 @@ body { min-width: 0; }
 .table__row .row-actions { display: flex; gap: 6px; justify-content: flex-end; opacity: 1; }
 .table__foot--text { justify-content: flex-start; padding: 16px 21px; font-size: var(--fs-table); color: var(--ink-3); }
 .people-table .table__head, .people-table .table__row { grid-template-columns: minmax(130px, 1.5fr) 104px 64px 84px 112px 332px; gap: 12px; }
-.vaults-table .table__head, .vaults-table .table__row { grid-template-columns: minmax(110px, 1fr) 100px minmax(110px, 140px) 112px; gap: 12px; }
+.vaults-table .table__head, .vaults-table .table__row { grid-template-columns: minmax(110px, 1fr) 100px 80px minmax(110px, 140px) 112px; gap: 12px; }
+.vaults-table .cell--name { padding: 9px 0; }
+.cell__note { display: block; margin-top: 3px; color: var(--ink-3); font-size: var(--fs-micro); font-weight: 500; overflow-wrap: anywhere; }
 .table__row > span { min-width: 0; overflow-wrap: anywhere; }
 .table__row > .cell--actions { overflow-wrap: normal; }
 .table__row time { white-space: nowrap; }
@@ -109,11 +111,12 @@ body { min-width: 0; }
   .people-table .table__row > :nth-child(4) { grid-area: space; }
   .people-table .table__row > :nth-child(5) { grid-area: act; }
   .people-table .table__row > :nth-child(6) { grid-area: actions; justify-self: stretch; }
-  .vaults-table .table__row { grid-template-columns: 1fr 1fr; grid-template-areas: "id id" "space act" "actions actions"; gap: 12px; padding: 16px 18px; align-items: start; }
-  .vaults-table .table__row > :nth-child(1) { grid-area: id; }
+  .vaults-table .table__row { grid-template-columns: 1fr 1fr 1fr; grid-template-areas: "id id id" "space files act" "actions actions actions"; gap: 12px; padding: 16px 18px; align-items: start; }
+  .vaults-table .table__row > :nth-child(1) { grid-area: id; padding: 0; }
   .vaults-table .table__row > :nth-child(2) { grid-area: space; }
-  .vaults-table .table__row > :nth-child(3) { grid-area: act; }
-  .vaults-table .table__row > :nth-child(4) { grid-area: actions; justify-self: stretch; }
+  .vaults-table .table__row > :nth-child(3) { grid-area: files; }
+  .vaults-table .table__row > :nth-child(4) { grid-area: act; }
+  .vaults-table .table__row > :nth-child(5) { grid-area: actions; justify-self: stretch; }
   .table__row .cell--num { text-align: left; }
   .table__row [data-label]::before { content: attr(data-label); display: block; margin-bottom: 3px; color: var(--ink-4); font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
   .table__row .row-actions { flex-wrap: wrap; justify-content: flex-start; }

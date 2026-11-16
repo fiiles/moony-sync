@@ -257,7 +257,7 @@ describe("person detail", () => {
   it("lists the profiles and deletes one after a confirmation", async () => {
     const mock = installMock({
       "GET state": () => ({ json: loggedIn }),
-      "GET people/p1": () => ({ json: { ...person(), vaults: [{ id: "vault-id-1", shortId: "vaultA", bytes: 1024 * 1024, files: 0, lastActivity: null }] } }),
+      "GET people/p1": () => ({ json: { ...person(), vaults: [{ id: "vault-id-1", shortId: "vaultA", bytes: 1024 * 1024, files: 0, lastActivity: null, kitSince: null, kitLastRead: null }] } }),
       "DELETE people/p1/vaults/vault-id-1": () => ({}),
     });
     openApp("/people/p1");
@@ -267,6 +267,44 @@ describe("person detail", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete profile" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(mock.calls.some((c) => c.method === "DELETE" && c.path === "people/p1/vaults/vault-id-1")).toBe(true);
+  });
+
+  const kitVaults = [
+    { id: "v1", shortId: "vaultA", bytes: 1024, files: 0, lastActivity: null, kitSince: 1_800_000_000, kitLastRead: null },
+    { id: "v2", shortId: "vaultB", bytes: 1024, files: 0, lastActivity: null, kitSince: 1_800_000_000, kitLastRead: 1_800_086_400 },
+    { id: "v3", shortId: "vaultC", bytes: 1024, files: 0, lastActivity: null, kitSince: null, kitLastRead: null },
+  ];
+
+  it("shows each profile's Recovery Kit: created, last used or never, or none", async () => {
+    installMock({
+      "GET state": () => ({ json: loggedIn }),
+      "GET people/p1": () => ({ json: { ...person(), vaults: kitVaults } }),
+    });
+    openApp("/people/p1");
+    await screen.findByText("vaultA");
+    const created = new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(1_800_000_000 * 1000));
+    const used = new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(1_800_086_400 * 1000));
+    const text = document.body.textContent ?? "";
+    expect(text).toContain(`Recovery kit: created ${created} · last used never`);
+    expect(text).toContain(`Recovery kit: created ${created} · last used ${used}`);
+    expect(text).toContain("Recovery kit: none");
+    expect(text).toContain("the synced data of one Moony profile");
+  });
+
+  it("says it in Czech", async () => {
+    installMock({
+      "GET state": () => ({ json: loggedIn }),
+      "GET people/p1": () => ({ json: { ...person(), vaults: kitVaults } }),
+    });
+    openApp("/people/p1", "cs");
+    await screen.findByText("vaultA");
+    const created = new Intl.DateTimeFormat("cs", { dateStyle: "medium" }).format(new Date(1_800_000_000 * 1000));
+    const used = new Intl.DateTimeFormat("cs", { dateStyle: "medium" }).format(new Date(1_800_086_400 * 1000));
+    const text = document.body.textContent ?? "";
+    expect(text).toContain(`Záchranná sada: vytvořena ${created} · naposledy použita nikdy`);
+    expect(text).toContain(`Záchranná sada: vytvořena ${created} · naposledy použita ${used}`);
+    expect(text).toContain("Záchranná sada: žádná");
+    expect(text).toContain("synchronizovaná data jednoho profilu Moony");
   });
 });
 
@@ -382,7 +420,7 @@ describe("blob quota, files and backup size", () => {
   it("person detail shows each profile's file count", async () => {
     installMock({
       "GET state": () => ({ json: loggedIn }),
-      "GET people/p1": () => ({ json: { ...person(), vaults: [{ id: "v1", shortId: "vaultA", bytes: 1024, files: 3, lastActivity: null }] } }),
+      "GET people/p1": () => ({ json: { ...person(), vaults: [{ id: "v1", shortId: "vaultA", bytes: 1024, files: 3, lastActivity: null, kitSince: null, kitLastRead: null }] } }),
     });
     openApp("/people/p1");
     await screen.findByText("vaultA");

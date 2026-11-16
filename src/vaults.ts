@@ -100,7 +100,16 @@ export interface Vaults {
   /** Unconditional delete (admin). */
   wipe(vaultId: string): void;
   /** Every vault with its stored bytes (ops + snapshot files) and last activity, oldest first. */
-  usage(): { vaultId: string; account: string; bytes: number; files: number; lastActivity: number | null }[];
+  usage(): {
+    vaultId: string;
+    account: string;
+    bytes: number;
+    files: number;
+    lastActivity: number | null;
+    /** When the Recovery Kit's token was set, and the minute of its last read; null = none. */
+    kitSince: number | null;
+    kitLastRead: number | null;
+  }[];
   /** Drops every vault row of the account at once (calls answer vault_not_found from here on) and
    *  returns the IDs; joins an outer transaction. Finish with `finishWipes`. */
   dropAccount(account: string): string[];
@@ -203,8 +212,9 @@ export function createVaults(
       `SELECT v.vault_id, v.account, v.last_activity,
               v.bytes + COALESCE((SELECT SUM(s.size) FROM snapshots s WHERE s.vault_id = v.vault_id), 0)
                       + COALESCE((SELECT SUM(b.size) FROM blobs b WHERE b.vault_id = v.vault_id), 0) AS total,
-              (SELECT COUNT(*) FROM blobs b WHERE b.vault_id = v.vault_id) AS files
-       FROM vaults v ORDER BY v.created_at, v.rowid`,
+              (SELECT COUNT(*) FROM blobs b WHERE b.vault_id = v.vault_id) AS files,
+              k.since AS kit_since, k.last_read AS kit_last_read
+       FROM vaults v LEFT JOIN kits k ON k.vault_id = v.vault_id ORDER BY v.created_at, v.rowid`,
     ),
     byAccount: db.prepare(
       "SELECT vault_id, bytes, last_activity FROM vaults WHERE account = ? ORDER BY created_at, rowid",
@@ -580,6 +590,8 @@ export function createVaults(
           last_activity: number | null;
           total: number;
           files: number;
+          kit_since: number | null;
+          kit_last_read: number | null;
         }[]
       ).map((r) => ({
         vaultId: r.vault_id,
@@ -587,6 +599,8 @@ export function createVaults(
         bytes: r.total,
         files: r.files,
         lastActivity: r.last_activity,
+        kitSince: r.kit_since,
+        kitLastRead: r.kit_last_read,
       })),
 
     dropAccount: atomic((account: string) => {

@@ -205,7 +205,7 @@ numbers never appear in answers, except inside a connection code.
 | `GET` | `/admin/api/overview` | `{address, addressSuggestion, people, profiles, bytesUsed, bytesFree, lastActivity, version, insecure}` |
 | `GET` | `/admin/api/people` | `[{id, name, state, profiles, bytes, lastActivity, createdAt}]` |
 | `POST` | `/admin/api/people` | `{name}` → `201 {person, connectionCode}`. `400 invalid_name`; `409 address_not_set` until an address is saved or `PUBLIC_URL` is set |
-| `GET` | `/admin/api/people/:id` | The person plus `vaults: [{id, shortId, bytes, files, lastActivity}]`; `bytes` counts ops, snapshots and blobs, `files` is the number of blob records |
+| `GET` | `/admin/api/people/:id` | The person plus `vaults: [{id, shortId, bytes, files, lastActivity, kitSince, kitLastRead}]`; `bytes` counts ops, snapshots and blobs, `files` is the number of blob records; `kitSince` is when the profile's Recovery Kit was created (its token set) and `kitLastRead` the minute of its last use, each `null` when there is none. Never the Kit's token or envelope. |
 | `PATCH` | `/admin/api/people/:id` | Exactly one of `{name}` (`400 invalid_name`, also for a non-string) or `{state: "active" \| "blocked"}` |
 | `POST` | `/admin/api/people/:id/connection-code` | `{password}` → `{connectionCode}`; the same password check and attempt limit as login |
 | `DELETE` | `/admin/api/people/:id` | `204`; removes the person, their vaults and their snapshot and blob files |
