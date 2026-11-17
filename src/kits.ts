@@ -22,6 +22,7 @@ export interface KitRow {
   since: number;
   updated_at: number;
   last_read: number | null;
+  stored_rotation: number;
 }
 
 /** The Kit as vault info reports it. */
@@ -30,20 +31,23 @@ export type KitInfo = { since: number; lastRead: number | null };
 /** The Kit's rows. Every call runs on the caller's connection and joins its transaction. */
 export function kitRows(db: Db) {
   const q = {
-    get: db.prepare("SELECT token_hash, envelope, since, updated_at, last_read FROM kits WHERE vault_id = ?"),
+    get: db.prepare("SELECT token_hash, envelope, since, updated_at, last_read, stored_rotation FROM kits WHERE vault_id = ?"),
     retired: db.prepare("SELECT retired_at FROM kits_retired WHERE vault_id = ? AND token_hash = ?"),
     insert: db.prepare(
-      "INSERT INTO kits (vault_id, token_hash, envelope, since, updated_at, last_read) VALUES (?, ?, ?, ?, ?, NULL)",
+      `INSERT INTO kits (vault_id, token_hash, envelope, since, updated_at, last_read, stored_rotation)
+       VALUES (?, ?, ?, ?, ?, NULL, (SELECT rotation FROM vaults WHERE vault_id = ?))`,
     ),
     setEnvelope: db.prepare("UPDATE kits SET envelope = ?, updated_at = ? WHERE vault_id = ?"),
     setKit: db.prepare(
-      "UPDATE kits SET token_hash = ?, envelope = ?, since = ?, updated_at = ?, last_read = NULL WHERE vault_id = ?",
+      `UPDATE kits SET token_hash = ?, envelope = ?, since = ?, updated_at = ?, last_read = NULL,
+         stored_rotation = (SELECT rotation FROM vaults WHERE vault_id = ?) WHERE vault_id = ?`,
     ),
     retire: db.prepare("INSERT INTO kits_retired (vault_id, token_hash, retired_at) VALUES (?, ?, ?)"),
     pruneRetired: db.prepare(
       `DELETE FROM kits_retired WHERE vault_id = ? AND rowid NOT IN (
          SELECT rowid FROM kits_retired WHERE vault_id = ? ORDER BY retired_at DESC, rowid DESC LIMIT ?)`,
     ),
+    rotationOf: db.prepare("SELECT rotation FROM vaults WHERE vault_id = ?"),
     markRead: db.prepare("UPDATE kits SET last_read = ? WHERE vault_id = ?"),
     // Any token the vault has had and still remembers, whatever its age: a Kit token may never
     // be one of them.
@@ -68,10 +72,11 @@ export function kitRows(db: Db) {
       if (k && timingSafeEqualStr(k.token_hash, tokenHash)) return true;
       return q.retired.get(vaultId, tokenHash) !== undefined;
     },
+    vaultRotation: (vaultId: string): number => (q.rotationOf.get(vaultId) as { rotation: number }).rotation,
     isVaultHash: (vaultId: string, tokenHash: string): boolean =>
       q.vaultToken.get(vaultId, tokenHash, vaultId, tokenHash) !== undefined,
     insert(vaultId: string, tokenHash: string, envelope: Uint8Array, now: number): void {
-      q.insert.run(vaultId, tokenHash, asBuffer(envelope), now, now);
+      q.insert.run(vaultId, tokenHash, asBuffer(envelope), now, now, vaultId);
     },
     replaceEnvelope(vaultId: string, envelope: Uint8Array, now: number): void {
       q.setEnvelope.run(asBuffer(envelope), now, vaultId);
@@ -80,12 +85,12 @@ export function kitRows(db: Db) {
     replaceKit(vaultId: string, tokenHash: string, envelope: Uint8Array, now: number): void {
       const old = q.get.get(vaultId) as KitRow | undefined;
       if (!old) {
-        q.insert.run(vaultId, tokenHash, asBuffer(envelope), now, now);
+        q.insert.run(vaultId, tokenHash, asBuffer(envelope), now, now, vaultId);
         return;
       }
       q.retire.run(vaultId, old.token_hash, now);
       q.pruneRetired.run(vaultId, vaultId, MAX_KIT_RETIRED_KEPT);
-      q.setKit.run(tokenHash, asBuffer(envelope), now, now, vaultId);
+      q.setKit.run(tokenHash, asBuffer(envelope), now, now, vaultId, vaultId);
     },
     markRead(vaultId: string, minute: number): void {
       q.markRead.run(minute, vaultId);
@@ -109,7 +114,7 @@ export type KitReplaced = Failure & { error: "kit_replaced"; replacedAt: number 
 
 export interface Kits {
   /** PUT /kit: the current vault token sets the Kit up (201), or replaces the envelope of the
-   *  same Kit token (a retried setup, 200). */
+   *  same Kit token while the vault has not rotated since (a retried setup, 200; later 409). */
   put(vaultId: string, vaultToken: string, kitToken: string, envelope: Uint8Array): Result<{ created: boolean }>;
   /** GET /kit with the Kit token. Never looks at vault tokens. */
   read(vaultId: string, kitToken: string): Result<KitRead> | KitReplaced;
@@ -127,6 +132,9 @@ export function createKits(db: Db, clock: Clock, people: People, vaults: Vaults)
       const hash = sha256(kitToken);
       const current = rows.get(vaultId);
       if (current && timingSafeEqualStr(current.token_hash, hash)) {
+        // Only a retried setup may replace the envelope: once the vault has rotated since the
+        // Kit token was set, the envelope changes only with a rotation.
+        if (rows.vaultRotation(vaultId) !== current.stored_rotation) return fail(409, "kit_exists");
         rows.replaceEnvelope(vaultId, envelope, now);
         return { ok: true, created: false };
       }

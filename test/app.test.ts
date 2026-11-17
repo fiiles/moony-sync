@@ -139,10 +139,10 @@ describe("openDb", () => {
     raw.prepare("INSERT INTO vaults (vault_id, account, token_hash, created_at, head) VALUES ('vault-a', '1234567890123456', 'h', 1, 3)").run();
     raw.prepare("INSERT INTO blobs (vault_id, blob_id, size, created_at) VALUES ('vault-a', 'b', 9, 1)").run();
     raw.close();
-    expect(MIGRATIONS).toHaveLength(7);
+    expect(MIGRATIONS).toHaveLength(8);
 
     const db = openDb(dir);
-    expect((db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number }).v).toBe(7);
+    expect((db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number }).v).toBe(8);
     expect(db.prepare("SELECT vault_id, head FROM vaults").all()).toEqual([{ vault_id: "vault-a", head: 3 }]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM blobs").get()).toEqual({ n: 1 });
     db.prepare("INSERT INTO kits (vault_id, token_hash, envelope, since, updated_at) VALUES ('vault-a', 'k', x'00', 2, 2)").run();

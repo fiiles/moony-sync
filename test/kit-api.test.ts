@@ -61,6 +61,37 @@ async function vaultWithKit(t: TestApp, envelope = "envelope-1") {
 }
 
 describe("PUT /v1/vaults/:id/kit", () => {
+  it("refuses a same-token envelope replacement once the vault has rotated since the Kit was stored: 409 kit_exists", async () => {
+    const t = testApp();
+    const { v, kit } = await vaultWithKit(t, "sealed");
+    // Still the setup window: a retried setup works.
+    expect((await putKit(t, v, { token: kit, envelope: b64("retry") })).status).toBe(200);
+
+    // An envelope-only rotation (the Kit token is kept) closes the window.
+    const next = newToken();
+    expect((await rotate(t, v, { token: next, kit: { envelope: b64("rotated") } })).status).toBe(200);
+    t.clock.now += 60;
+    const r = await putKit(t, { ...v, token: next }, { token: kit, envelope: b64("swapped") });
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { error: string }).error).toBe("kit_exists");
+    const body = (await (await getKit(t, v.id, kit)).json()) as KitBody;
+    expect(unb64(body.envelope)).toBe("rotated");
+  });
+
+  it("a Kit stored by a rotation opens its own setup window: a retried PUT then works until the next rotation", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const next = newToken();
+    const kit = newToken();
+    expect((await rotate(t, v, { token: next })).status).toBe(200);
+    const v2 = { ...v, token: next };
+    expect((await putKit(t, v2, { token: kit, envelope: b64("a") })).status).toBe(201);
+    expect((await putKit(t, v2, { token: kit, envelope: b64("b") })).status).toBe(200);
+    const next2 = newToken();
+    expect((await rotate(t, v2, { token: next2, kit: { envelope: b64("c") } })).status).toBe(200);
+    expect((await putKit(t, { ...v, token: next2 }, { token: kit, envelope: b64("d") })).status).toBe(409);
+  });
+
   it("stores the Kit (201), and a retry with the same token replaces the envelope (200)", async () => {
     const t = testApp();
     const v = await newVault(t);

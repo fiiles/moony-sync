@@ -128,6 +128,10 @@ export const MIGRATIONS: readonly string[] = [
     retired_at INTEGER NOT NULL,
     PRIMARY KEY (vault_id, token_hash)
   )`,
+  // 8: the vault's rotation count when the Kit token was set. A same-token PUT may replace the
+  // envelope only while the vault is still at that count (a retried setup); rows from before
+  // keep 0, which only a never-rotated vault matches.
+  `ALTER TABLE kits ADD COLUMN stored_rotation INTEGER NOT NULL DEFAULT 0`,
 ];
 
 /** Opens (creating it if needed) the database in `dataDir`, migrates it to the current

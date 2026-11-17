@@ -528,6 +528,12 @@ Choices made where the phase-5 revision spec (§2.9) left the relay open:
    housekeeping has nothing to do for Kits (deletion cascades).
 8. A Kit envelope is not counted in a vault's `bytes` or the admin's space figures (at most 256 KiB
    per vault).
+9. A same-token `PUT /kit` replaces the envelope only in the setup window: while the vault's rotation
+   count still equals the one stored with the Kit token (`kits.stored_rotation`, migration 8, set when
+   the token is stored, by `PUT` or by a rotation that replaces the Kit). After any rotation, even one
+   that only re-seals the envelope, the same call is `409 kit_exists`; the envelope then changes only
+   with a rotation, which every honest device sees. A retried setup always happens before a rotation,
+   so it keeps working. Kits stored before migration 8 count as stored at rotation 0.
 
 ## Not built
 
