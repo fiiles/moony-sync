@@ -24,6 +24,7 @@ import {
   READ_GRACE_SECONDS,
   SNAPSHOTS_KEPT,
 } from "./limits.js";
+import { kitRows, type KitInfo } from "./kits.js";
 import type { People } from "./people.js";
 import type { BlobFiles } from "./blob-files.js";
 import type { Snapshots } from "./snapshots.js";
@@ -37,7 +38,12 @@ export type VaultInfo = {
   paidUntil: number;
   bytes: number;
   rotation: number;
+  /** The Recovery Kit: when its token was set and the minute of its last read; null = no Kit. */
+  kit: KitInfo | null;
 };
+/** The Kit part of a rotation: the envelope for the new key, and a token when the Kit is replaced
+ *  (or the vault gets its first Kit). */
+export type KitUpdate = { envelope: Uint8Array; token?: string };
 export type Rekey = { rotation: number; head: number; at: number; rekey: string };
 export type SnapshotRef = { file: string; seq: number; size: number };
 
@@ -76,6 +82,7 @@ export interface Vaults {
     token: string,
     next: string,
     rekey: Uint8Array,
+    kit?: KitUpdate,
   ): Promise<Result<{ rotation: number; head: number }>>;
   rekeys(
     vaultId: string,
@@ -93,7 +100,16 @@ export interface Vaults {
   /** Unconditional delete (admin). */
   wipe(vaultId: string): void;
   /** Every vault with its stored bytes (ops + snapshot files) and last activity, oldest first. */
-  usage(): { vaultId: string; account: string; bytes: number; files: number; lastActivity: number | null }[];
+  usage(): {
+    vaultId: string;
+    account: string;
+    bytes: number;
+    files: number;
+    lastActivity: number | null;
+    /** When the Recovery Kit's token was set, and the minute of its last read; null = none. */
+    kitSince: number | null;
+    kitLastRead: number | null;
+  }[];
   /** Drops every vault row of the account at once (calls answer vault_not_found from here on) and
    *  returns the IDs; joins an outer transaction. Finish with `finishWipes`. */
   dropAccount(account: string): string[];
@@ -132,6 +148,7 @@ export function createVaults(
   snapshots: Snapshots,
   blobFiles: BlobFiles,
 ): Vaults {
+  const kits = kitRows(db);
   const q = {
     meta: db.prepare("SELECT * FROM vaults WHERE vault_id = ?"),
     countByAccount: db.prepare("SELECT COUNT(*) AS n FROM vaults WHERE account = ?"),
@@ -195,8 +212,9 @@ export function createVaults(
       `SELECT v.vault_id, v.account, v.last_activity,
               v.bytes + COALESCE((SELECT SUM(s.size) FROM snapshots s WHERE s.vault_id = v.vault_id), 0)
                       + COALESCE((SELECT SUM(b.size) FROM blobs b WHERE b.vault_id = v.vault_id), 0) AS total,
-              (SELECT COUNT(*) FROM blobs b WHERE b.vault_id = v.vault_id) AS files
-       FROM vaults v ORDER BY v.created_at, v.rowid`,
+              (SELECT COUNT(*) FROM blobs b WHERE b.vault_id = v.vault_id) AS files,
+              k.since AS kit_since, k.last_read AS kit_last_read
+       FROM vaults v LEFT JOIN kits k ON k.vault_id = v.vault_id ORDER BY v.created_at, v.rowid`,
     ),
     byAccount: db.prepare(
       "SELECT vault_id, bytes, last_activity FROM vaults WHERE account = ? ORDER BY created_at, rowid",
@@ -345,7 +363,7 @@ export function createVaults(
   );
 
   const doRotate = atomic(
-    (vaultId: string, token: string, newToken: string, rekey: Uint8Array) => {
+    (vaultId: string, token: string, newToken: string, rekey: Uint8Array, kit: KitUpdate | undefined) => {
       const tokenHash = sha256(token);
       const newHash = sha256(newToken);
       const m = meta(vaultId);
@@ -356,6 +374,20 @@ export function createVaults(
       if (role === "previous") return fail(403, "token_read_only");
       // A token that was ever the vault's (and is still remembered) cannot come back.
       if (roleOf(m, newHash, now)) return fail(400, "invalid_token");
+      // Nor can a Kit token, current or replaced: it would read the envelope and act on the vault.
+      if (kits.isKitHash(vaultId, newHash)) return fail(400, "invalid_token");
+      // A vault with a Kit seals every new key to it: the envelope comes with the rotation.
+      const currentKit = kits.get(vaultId);
+      if (currentKit && !kit) return fail(400, "kit_required");
+      // An envelope without a Kit token has no Kit to belong to.
+      if (kit && kit.token === undefined && !currentKit) return fail(400, "invalid_kit");
+      const kitHash = kit?.token === undefined ? null : sha256(kit.token);
+      if (
+        kitHash !== null &&
+        (kitHash === newHash || kits.isVaultHash(vaultId, kitHash) || kits.isKitHash(vaultId, kitHash))
+      ) {
+        return fail(400, "invalid_kit_token");
+      }
       const kept = (q.countRekeys.get(vaultId, now - PREVIOUS_TOKEN_SECONDS) as { n: number }).n;
       if (kept >= MAX_REKEYS_KEPT) return fail(409, "too_many_rotations");
 
@@ -365,6 +397,8 @@ export function createVaults(
       q.insertPrevToken.run(vaultId, m.token_hash, now);
       q.setToken.run(newHash, rotation, vaultId);
       q.insertRekey.run(vaultId, rotation, m.head, now, asBuffer(rekey));
+      if (kit && kitHash !== null) kits.replaceKit(vaultId, kitHash, kit.envelope, now);
+      else if (kit) kits.replaceEnvelope(vaultId, kit.envelope, now);
       const minute = now - (now % 60);
       q.touch.run(minute, vaultId);
       return { ok: true as const, rotation, head: m.head };
@@ -416,6 +450,7 @@ export function createVaults(
         paidUntil: paidUntilOf(m),
         bytes: m.bytes,
         rotation: m.rotation,
+        kit: kits.info(vaultId),
       };
     },
 
@@ -477,11 +512,11 @@ export function createVaults(
       return row ? { ok: true, ...row } : fail(404, "no_snapshot");
     },
 
-    async rotateToken(vaultId, token, next, rekey) {
+    async rotateToken(vaultId, token, next, rekey, kit) {
       if (rekey.byteLength === 0 || rekey.byteLength > MAX_REKEY_BYTES) {
         return fail(400, "invalid_rekey");
       }
-      return doRotate(vaultId, token, next, rekey);
+      return doRotate(vaultId, token, next, rekey, kit);
     },
 
     async rekeys(vaultId, token, after, limit) {
@@ -555,6 +590,8 @@ export function createVaults(
           last_activity: number | null;
           total: number;
           files: number;
+          kit_since: number | null;
+          kit_last_read: number | null;
         }[]
       ).map((r) => ({
         vaultId: r.vault_id,
@@ -562,6 +599,8 @@ export function createVaults(
         bytes: r.total,
         files: r.files,
         lastActivity: r.last_activity,
+        kitSince: r.kit_since,
+        kitLastRead: r.kit_last_read,
       })),
 
     dropAccount: atomic((account: string) => {

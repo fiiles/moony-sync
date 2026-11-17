@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decodeConnectionCode } from "../src/connection-code.js";
 import { blobQuotaBytes } from "../src/blobs.js";
-import { ADMIN_PASSWORD, adminSession, newBlobId, newVault, pull, push, setupAdmin, snapshotFiles, testApp, uploadBlob, uploadSnapshot } from "./helpers.js";
+import { ADMIN_PASSWORD, adminSession, newBlobId, newToken, newVault, pull, push, setupAdmin, snapshotFiles, testApp, uploadBlob, uploadSnapshot } from "./helpers.js";
 import type { TestApp } from "./helpers.js";
 
 const ADDRESS = "https://sync.example";
@@ -62,6 +62,7 @@ describe("space figures", () => {
     const detail = await json(await s.call("GET", `people/${person.id}`));
     expect(detail.vaults[0]).toEqual({
       id: v.id, shortId: v.id.slice(0, 6), bytes: 5 + 128 + 1000, files: 1, lastActivity: expect.any(Number),
+      kitSince: null, kitLastRead: null,
     });
   });
 });
@@ -200,9 +201,38 @@ describe("people", () => {
     await push(t, v, [{ id: "a", ct: btoa("123") }]);
     const r = await json(await s.call("GET", `people/${a.person.id}`));
     expect(r).toMatchObject({ id: a.person.id, name: "Anna", profiles: 1, bytes: 3 + OP_OVERHEAD_BYTES });
-    expect(r.vaults).toEqual([{ id: v.id, shortId: v.id.slice(0, 6), bytes: 3 + OP_OVERHEAD_BYTES, files: 0, lastActivity: expect.any(Number) }]);
+    expect(r.vaults).toEqual([{ id: v.id, shortId: v.id.slice(0, 6), bytes: 3 + OP_OVERHEAD_BYTES, files: 0, lastActivity: expect.any(Number), kitSince: null, kitLastRead: null }]);
     const none = await s.call("GET", "people/nope");
     expect([none.status, await json(none)]).toEqual([404, { error: "person_not_found" }]);
+  });
+
+  it("GET people/:id shows when each profile's Recovery Kit was set and last read", async () => {
+    const { t, s } = await ready();
+    await withAddress(s);
+    const a = await create(s);
+    const account = t.stores.people.get(a.person.id)!.account;
+    const v = await newVault(t, account);
+    const bare = await newVault(t, account);
+    const kit = newToken();
+    const put = await t.call("PUT", `/v1/vaults/${v.id}/kit`, {
+      headers: { authorization: `Bearer ${v.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ token: kit, envelope: btoa("sealed") }),
+    });
+    expect(put.status).toBe(201);
+    const since = t.clock.now;
+    const kitOf = async (id: string) =>
+      (await json(await s.call("GET", `people/${a.person.id}`))).vaults.find((x: { id: string }) => x.id === id);
+
+    expect(await kitOf(v.id)).toMatchObject({ kitSince: since, kitLastRead: null });
+    expect(await kitOf(bare.id)).toMatchObject({ kitSince: null, kitLastRead: null });
+
+    t.clock.now += 7200 + 30;
+    expect((await t.call("GET", `/v1/vaults/${v.id}/kit`, { headers: { authorization: `Bearer ${kit}` } })).status).toBe(200);
+    expect(await kitOf(v.id)).toMatchObject({ kitSince: since, kitLastRead: t.clock.now - 30 });
+    // Never the Kit's token or envelope.
+    const text = JSON.stringify(await json(await s.call("GET", `people/${a.person.id}`)));
+    expect(text).not.toContain(kit);
+    expect(text).not.toContain(btoa("sealed"));
   });
 
   it("PATCH takes exactly one of name or state", async () => {

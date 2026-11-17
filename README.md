@@ -148,7 +148,8 @@ people make. It exposes, to anyone who can watch the network between the device 
 - the admin password, the session cookie and the second-factor codes, when you use the admin page,
 - the connection codes shown on the page,
 - people's account numbers and vault tokens (these let someone read the stored encrypted data,
-  and write to it).
+  and write to it), and Recovery Kit tokens when a Kit is used (they read the Kit's encrypted copy
+  of the keys, which is useless without the printed Kit).
 
 It does not expose your finances: the apps encrypt everything before it leaves the device, and
 the server never sees a key. The admin page tells you when it is opened over plain http from a

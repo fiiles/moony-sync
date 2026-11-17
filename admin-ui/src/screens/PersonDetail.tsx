@@ -101,8 +101,16 @@ export function PersonDetail({ id }: { id: string }) {
             </div>
             {p.vaults.map((v) => (
               <div class="table__row" role="row" key={v.id}>
-                <span role="cell" class="cell--name mono">
-                  {v.shortId}
+                <span role="cell" class="cell--name">
+                  <span class="mono">{v.shortId}</span>
+                  <span class="cell__note">
+                    {v.kitSince === null
+                      ? t("person.kitNone")
+                      : t("person.kit", {
+                          created: formatDate(v.kitSince, lang),
+                          used: v.kitLastRead === null ? t("person.kitNever") : formatDate(v.kitLastRead, lang),
+                        })}
+                  </span>
                 </span>
                 <span role="cell" class="cell--num" data-label={t("person.colSpace")}>
                   <Size bytes={v.bytes} />

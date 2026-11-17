@@ -48,6 +48,10 @@ export interface Vault {
   bytes: number;
   files: number;
   lastActivity: number | null;
+  /** When the profile's Recovery Kit was created (its token set); null = no Kit. */
+  kitSince: number | null;
+  /** The minute the Kit was last used to read; null = never. */
+  kitLastRead: number | null;
 }
 
 export type PersonDetail = Person & { vaults: Vault[] };

@@ -14,6 +14,7 @@ import { createPeople, type People } from "./people.js";
 import { clientKey, createLimiters } from "./ratelimit.js";
 import { createBlobFiles, type BlobFiles } from "./blob-files.js";
 import { createBlobs, type Blobs } from "./blobs.js";
+import { createKits, type Kits } from "./kits.js";
 import { createSnapshots, type Snapshots } from "./snapshots.js";
 import { createVaults, type Vaults } from "./vaults.js";
 import { syncRoutes } from "./sync-api.js";
@@ -21,7 +22,7 @@ import { createStaticHandler, DEFAULT_UI_DIR } from "./static.js";
 
 export const PROTOCOL = 2;
 /** Optional capabilities of this server; a server without the field has none. */
-export const FEATURES = ["blobs"] as const;
+export const FEATURES = ["blobs", "kit"] as const;
 
 /** Hono env: the peer socket address, for routes that rate-limit or log by client. */
 export interface AppBindings {
@@ -50,6 +51,7 @@ export interface Stores {
   snapshots: Snapshots;
   blobFiles: BlobFiles;
   mailboxes: Mailboxes;
+  kits: Kits;
 }
 
 export function createApp(given: Deps): {
@@ -74,6 +76,7 @@ export function createApp(given: Deps): {
     mailboxes: createMailboxes(deps.db, deps.clock),
     vaults,
     blobs: createBlobs(deps.db, deps.clock, vaults, blobFiles),
+    kits: createKits(deps.db, deps.clock, people, vaults),
   };
   const app = new Hono<{ Bindings: AppBindings }>();
 

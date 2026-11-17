@@ -294,8 +294,8 @@ describe("token rotation", () => {
     const t = testApp();
     const v = await newVault(t);
     const res = await t.call("POST", `/v1/vaults/${v.id}/token`, {
-      headers: auth(v, { "content-type": "application/json", "content-length": String(600 * 1024) }),
-      body: "x".repeat(600 * 1024),
+      headers: auth(v, { "content-type": "application/json", "content-length": String(800 * 1024) }),
+      body: "x".repeat(800 * 1024),
     });
     expect(res.status).toBe(413);
   });

@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import type { Clock } from "./clock.js";
+import { KIT_CLIENT_FAILURES_PER_MINUTE, KIT_READS_PER_MINUTE, KIT_VAULT_FAILURES_PER_HOUR } from "./limits.js";
 
 /** `hit` counts one request for `key`; true means the caller is over the limit. */
 export interface Limiter {
@@ -103,6 +104,14 @@ export interface Limiters {
   /** All vault routes, per client. */
   vaultIp: Limiter;
   pairing: Limiter;
+  /** Every GET /kit per client, before the token is looked at: a generous backstop. */
+  kitRead: Limiter;
+  /** Failed GET /kit attempts (401, 404) per client, per minute. Counted after the fact, so the
+   *  right Kit token is never refused by it. */
+  kitClientFailures: Limiter;
+  /** Failed GET /kit attempts (401) per vault, per hour. Counted after the fact, so the right Kit
+   *  token is never refused by it. */
+  kitVaultFailures: Limiter;
 }
 
 export function createLimiters(clock: Clock): Limiters {
@@ -111,6 +120,9 @@ export function createLimiters(clock: Clock): Limiters {
     vault: fixedWindow(600, 60, clock),
     vaultIp: fixedWindow(1200, 60, clock),
     pairing: fixedWindow(120, 60, clock),
+    kitRead: fixedWindow(KIT_READS_PER_MINUTE, 60, clock),
+    kitClientFailures: fixedWindow(KIT_CLIENT_FAILURES_PER_MINUTE, 60, clock),
+    kitVaultFailures: fixedWindow(KIT_VAULT_FAILURES_PER_HOUR, 60 * 60, clock),
   };
 }
 
