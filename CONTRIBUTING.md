@@ -28,7 +28,8 @@ below.
 External contributions are welcome, with the caveat that this is primarily a personal project:
 
 - **Bug reports**, the most valuable contribution (see below)
-- **Feature ideas**: open an issue for discussion before writing code
+- **Feature ideas**: open an issue with the **Feature idea** form for discussion before writing
+  code
 - **Documentation fixes**, for example a working configuration for another reverse proxy
 
 If you want to submit code, open an issue first to align on the approach, then open a pull

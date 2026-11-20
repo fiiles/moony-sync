@@ -1,0 +1,53 @@
+name: Feature idea
+description: Suggest an improvement for the Moony sync server
+title: '[Feature]: '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. The sync server is deliberately small: it stores and forwards
+        ciphertext it cannot read, and it makes no outbound connections. Please describe the
+        problem first; it makes it easier to find a solution that fits.
+
+        Larger features are discussed here before any code is written. An idea for the Moony app
+        itself belongs in the Moony repository.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Who is affected (the person who runs the server, or the people who sync through it) and what is hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How could the server help? Do not include codes, tokens or a real server address.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: What do you do today, and what else did you consider?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Admin page
+        - Running it (Docker, reverse proxy, settings)
+        - Backup and restore
+        - Sync API (needs a change in the Moony app as well)
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Principles
+      options:
+        - label: This idea does not need the server to read what it stores or to make an outbound connection (or the issue explains why it would).
+          required: true

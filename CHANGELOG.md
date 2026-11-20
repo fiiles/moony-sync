@@ -6,6 +6,8 @@ All notable changes to the Moony sync server are documented in this file. The fo
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-20
+
 ### Added
 
 - **The first public version of the server.** One Node process with a SQLite database and a data
@@ -34,3 +36,6 @@ All notable changes to the Moony sync server are documented in this file. The fo
 - **Vault IDs are unique ignoring letter case**, so two profiles can never share a folder on a
   file system that ignores case. A database that already holds two such IDs stops the server at
   start-up with one line (no IDs in it).
+
+[Unreleased]: https://github.com/fiiles/moony-sync/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/fiiles/moony-sync/releases/tag/v1.0.0

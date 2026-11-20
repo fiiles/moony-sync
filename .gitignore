@@ -1,5 +1,5 @@
-# Dependencies
-node_modules/
+# Dependencies (no trailing slash: a worktree may link to another checkout's folder)
+node_modules
 
 # Build outputs
 dist/

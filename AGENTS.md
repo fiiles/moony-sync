@@ -8,8 +8,7 @@ is in `README.md` (running the server) and `DESIGN.md` (protocol, storage, limit
 
 The Moony sync server: one Node process (Hono, SQLite through better-sqlite3) with one data
 folder, a web admin (Preact, built with Vite) and the sync API the Moony apps talk to. It stores
-and forwards ciphertext it cannot read. The code says "relay" in places; that is an internal
-name for the same thing.
+and forwards ciphertext it cannot read.
 
 ## Commands
 

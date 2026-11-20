@@ -5,8 +5,7 @@ Every Moony device keeps its own encrypted database; devices exchange encrypted 
 ("ops") through the server, and a new device bootstraps from an encrypted snapshot.
 
 You run it yourself (see `README.md`). It is one Node process with one data folder, a web admin
-for the person who runs it, and the sync API the Moony apps talk to. User-facing wording is "sync
-server"; "relay" is an internal name that survives in some code.
+for the person who runs it, and the sync API the Moony apps talk to.
 
 This document describes **protocol 3**, the first published protocol. `GET /v1/server` answers
 `protocol: 3`, and an app that needs it refuses an older server. How the protocol may change is

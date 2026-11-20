@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "description": "Self-hosted sync server for Moony: stores and forwards encrypted data it cannot read",
   "license": "AGPL-3.0-only",
+  "author": "Filip Král",
+  "homepage": "https://github.com/fiiles/moony-sync#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fiiles/moony-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fiiles/moony-sync/issues"
   },
   "private": true,
   "type": "module",

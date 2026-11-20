@@ -6,9 +6,10 @@ are best-effort commitments, not a service level.
 
 ## Supported versions
 
-There are no numbered releases yet: you build the server from this repository. Only the
-**latest commit on `main`** receives security fixes. If you run an older build, update first
-(`git pull`, `docker compose up -d --build`) and check whether the problem still exists.
+Releases are numbered and tagged ([CHANGELOG.md](CHANGELOG.md)), but no image is published: you
+build the server from this repository. Only the **latest commit on `main`** receives security
+fixes; older releases get no backports. If you run an older build, update first (`git pull`,
+`docker compose up -d --build`) and check whether the problem still exists.
 
 ## Reporting a vulnerability
 
@@ -16,9 +17,9 @@ There are no numbered releases yet: you build the server from this repository. O
 
 Use **GitHub private vulnerability reporting**: on the repository open *Security → Report a
 vulnerability* (<https://github.com/fiiles/moony-sync/security/advisories/new>). Only the
-maintainer can read what you submit there. If you cannot use that form, open an ordinary issue
-that says just "security report, please contact me" without any detail, and the maintainer will
-arrange a private channel.
+maintainer can read what you submit there. If you cannot use that form, open an issue with the
+**Question** form that says just "security report, please contact me" without any detail, and
+the maintainer will arrange a private channel.
 
 A useful report contains:
 

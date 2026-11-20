@@ -9,6 +9,7 @@ data
 Dockerfile
 compose.yml
 *.md
+docs
 coverage
 test
 admin-ui/test

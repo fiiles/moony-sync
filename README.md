@@ -1,5 +1,8 @@
 # Moony sync server
 
+[![CI](https://github.com/fiiles/moony-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/fiiles/moony-sync/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
+
 A small server you run yourself, so your [Moony](https://github.com/fiiles/Moony) devices can
 keep their data in sync without any cloud service in between. It stores and forwards
 **encrypted** change records, encrypted snapshots, and the apps' encrypted documents and photos.
@@ -12,8 +15,10 @@ It cannot read them: the keys never leave your devices.
 - Written for a home server or a NAS: a Docker container, `compose.yml`, and a few lines of reverse
   proxy configuration for https.
 
-The code says "relay" in places. That is an internal name; everywhere you will look, it is the
-**sync server**.
+<p align="center"><img src="docs/screenshots/people.png" alt="People page of the admin: four people with their state, number of profiles, space used and last activity" width="800"></p>
+<p align="center"><img src="docs/screenshots/overview.png" alt="Overview page of the admin: people, profiles, space used, last sync and the address apps use" width="800"></p>
+
+The screenshots show made-up people and random data.
 
 How the protocol works, what the server stores and what it can see: [`DESIGN.md`](DESIGN.md).
 
@@ -359,8 +364,9 @@ you find.
 
 ## Help and security
 
-- **Bugs and questions:** [open an issue](https://github.com/fiiles/moony-sync/issues). Never
-  paste a connection code, an account number, a token, a setup code or a backup archive.
+- **Bugs, ideas and questions:**
+  [open an issue](https://github.com/fiiles/moony-sync/issues/new/choose). Never paste a
+  connection code, an account number, a token, a setup code or a backup archive.
 - **Security problems:** follow [SECURITY.md](SECURITY.md); do not file a public issue.
 
 ## License
