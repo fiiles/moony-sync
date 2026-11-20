@@ -80,7 +80,7 @@ describe("first run and setup", () => {
   it("sets up once, trims the name, opens a session and then answers setup_done", async () => {
     const t = testApp();
     const code = setupCodeFrom(t);
-    const res = await anon(t).call("POST", "setup", { code, name: "  Filip  ", password: ADMIN_PASSWORD });
+    const res = await anon(t).call("POST", "setup", { code, name: "  Alex  ", password: ADMIN_PASSWORD });
     expect(res.status).toBe(204);
     const cookie = res.headers.get("set-cookie")!;
     expect(cookie).toMatch(/^moony_admin=[A-Za-z0-9_-]{43};/);
@@ -89,7 +89,7 @@ describe("first run and setup", () => {
     expect(cookie).toContain("Path=/");
     expect(cookie).not.toContain("Secure");
     const state = await body(await adminSession(t, cookieFrom(res)).call("GET", "state"));
-    expect(state).toMatchObject({ setupNeeded: false, authenticated: true, name: "Filip", twoFactor: false });
+    expect(state).toMatchObject({ setupNeeded: false, authenticated: true, name: "Alex", twoFactor: false });
     const again = await anon(t).call("POST", "setup", { code, name: "Evil", password: ADMIN_PASSWORD });
     expect([again.status, await body(again)]).toEqual([403, { error: "setup_done" }]);
   });

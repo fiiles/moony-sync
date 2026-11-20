@@ -36,7 +36,7 @@ export function installMock(routes: Record<string, Handler>): Mock {
   return mock;
 }
 
-export const loggedIn = { setupNeeded: false, authenticated: true, name: "Filip", twoFactor: false, require2fa: false, mustEnrol2fa: false };
+export const loggedIn = { setupNeeded: false, authenticated: true, name: "Alex", twoFactor: false, require2fa: false, mustEnrol2fa: false };
 
 export function overviewBody(over: Record<string, unknown> = {}) {
   return {

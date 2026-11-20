@@ -555,7 +555,7 @@ export function createVaults(
       const m = meta(vaultId);
       if (!m) return;
       const now = clock();
-      // No lapse deletion here (spec 5.4): blocking never deletes data.
+      // No lapse deletion here: blocking never deletes data.
       prune(m, now);
       sweepOrphanFiles(vaultId, now);
     },

@@ -500,9 +500,9 @@ it. An upload that finishes after the vault is gone is refused and its file remo
   or backup leak exposes the account numbers (credentials for creating profiles, not for reading
   existing ones) and the second-factor secret.
 
-## As built: Recovery Kit (relay Task 11)
+## Recovery Kit: choices as built
 
-Choices made where the phase-5 revision spec (§2.9) left the relay open:
+The Recovery Kit is designed on the app side. That design left these points to the server:
 
 1. `PUT /kit` answers `201 {"created": true}` / `200 {"created": false}`, like vault creation.
 2. A `kit` with an envelope and no `token` on a vault without a Kit is `400 invalid_kit` (the envelope
@@ -520,9 +520,8 @@ Choices made where the phase-5 revision spec (§2.9) left the relay open:
 6. `GET /kit` order: `invalid_vault_id`, the vault limits per client, `kitRead` (backstop), a
    missing or malformed bearer (`401`, counted per client), the per vault + token limit, `404`
    (counted per client), then the Kit token: `410` as it is, `401` counted per client and per vault
-   (both counted before either refuses), then entitlement (`402`). After the review of Task 11 the
-   spec's `kitRead` (10/min of every call) became a 120/min backstop plus 10/min of failures per
-   client, and `410` left the per-vault count, so a shared proxy key cannot block recovery and a
+   (both counted before either refuses), then entitlement (`402`). The design's `kitRead` limit
+   (10/min of every call) became a 120/min backstop plus 10/min of failures per client, and `410` left the per-vault count, so a shared proxy key cannot block recovery and a
    replaced Kit always hears `kit_replaced`.
 7. The replaced Kit hashes are trimmed to 256 in the rotation's transaction, not by housekeeping;
    housekeeping has nothing to do for Kits (deletion cascades).

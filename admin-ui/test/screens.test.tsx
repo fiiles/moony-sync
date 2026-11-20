@@ -26,12 +26,12 @@ describe("setup", () => {
     openApp("/");
     await screen.findByRole("heading", { name: "Set up the server" });
     type("Setup code", "abc");
-    type("Administrator name", "Filip");
+    type("Administrator name", "Alex");
     type("Password", "correct horse battery");
     type("Password again", "correct horse battery");
     fireEvent.click(screen.getByRole("button", { name: "Set up the server" }));
     await screen.findByRole("heading", { name: "Overview" });
-    expect(mock.calls.find((c) => c.path === "setup")?.body).toEqual({ code: "abc", name: "Filip", password: "correct horse battery" });
+    expect(mock.calls.find((c) => c.path === "setup")?.body).toEqual({ code: "abc", name: "Alex", password: "correct horse battery" });
   });
 
   it("two different passwords are refused before any request", async () => {
@@ -60,7 +60,7 @@ describe("login", () => {
     });
     openApp("/");
     await screen.findByRole("heading", { name: "Log in" });
-    type("Name", "Filip");
+    type("Name", "Alex");
     type("Password", "pw-pw-pw-pw-pw");
     fireEvent.click(screen.getByRole("button", { name: "Log in" }));
     await screen.findByRole("heading", { name: "Second factor" });
@@ -69,7 +69,7 @@ describe("login", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm and log in" }));
     await screen.findByRole("heading", { name: "Overview" });
     const logins = mock.calls.filter((c) => c.path === "login");
-    expect(logins[1]?.body).toEqual({ name: "Filip", password: "pw-pw-pw-pw-pw", totp: "123456" });
+    expect(logins[1]?.body).toEqual({ name: "Alex", password: "pw-pw-pw-pw-pw", totp: "123456" });
   });
 
   it("shows a translated message for a server error and a generic one for an unknown error", async () => {
@@ -142,7 +142,7 @@ describe("people", () => {
     await screen.findByText("Nobody yet");
     fireEvent.click(within(document.querySelector(".empty") as HTMLElement).getByRole("button", { name: "Add person" }));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Filip" } });
+    fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Alex" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     const code = await screen.findByTestId("connection-code");
     expect(code.textContent).toMatch(/^moony-sync1:/);
@@ -451,7 +451,7 @@ describe("forced second factor enrolment", () => {
     let state: any = { ...loggedIn, require2fa: true, mustEnrol2fa: true };
     const mock = installMock({
       "GET state": () => ({ json: state }),
-      "POST 2fa/enrol": () => ({ json: { secret: "JBSWY3DPEHPK3PXP", otpauthUrl: "otpauth://totp/Moony:Filip?secret=JBSWY3DPEHPK3PXP&issuer=Moony" } }),
+      "POST 2fa/enrol": () => ({ json: { secret: "JBSWY3DPEHPK3PXP", otpauthUrl: "otpauth://totp/Moony:Alex?secret=JBSWY3DPEHPK3PXP&issuer=Moony" } }),
       "POST 2fa/confirm": () => {
         return { json: { backupCodes: ["AAAAAAAAAA", "BBBBBBBBBB"] } };
       },
@@ -689,14 +689,14 @@ describe("double submit", () => {
       "GET people": () => ({ json: [] }),
       "POST people": async () => {
         await new Promise((r) => setTimeout(r, 30));
-        return { status: 201, json: { person: person({ name: "Filip" }), connectionCode: "moony-sync1:1:aa" } };
+        return { status: 201, json: { person: person({ name: "Alex" }), connectionCode: "moony-sync1:1:aa" } };
       },
     });
     openApp("/people");
     await screen.findByText("Nobody yet");
     fireEvent.click(within(document.querySelector(".empty") as HTMLElement).getByRole("button", { name: "Add person" }));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Filip" } });
+    fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Alex" } });
     const form = dialog.querySelector("form")!;
     fireEvent.submit(form);
     fireEvent.submit(form);
@@ -718,7 +718,7 @@ describe("add person without an address", () => {
     await screen.findByText("Nobody yet");
     fireEvent.click(within(document.querySelector(".empty") as HTMLElement).getByRole("button", { name: "Add person" }));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Filip" } });
+    fireEvent.input(within(dialog).getByLabelText("Name"), { target: { value: "Alex" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     fireEvent.click(await within(dialog).findByRole("button", { name: "Go to Overview" }));
     await screen.findByRole("heading", { name: "Overview" });

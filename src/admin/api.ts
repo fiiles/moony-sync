@@ -1,5 +1,5 @@
-// The admin API under /admin/api. Task 6 holds the authentication routes; later tasks add their
-// routes to this router, behind the same guard.
+// The admin API under /admin/api: the authentication routes first, then the routes for people,
+// settings, overview and backup on the same router, behind the same guard.
 
 import { Hono, type Context } from "hono";
 import type { AppBindings, AppDeps, Stores } from "../app.js";
@@ -175,7 +175,7 @@ export function adminRoutes(deps: AppDeps, stores: Stores, auth: Auth, budget: B
   });
 
   // -------------------------------------------------------------------------------------------
-  // people, settings, overview, backup (Task 7). Admin answers never carry an account number,
+  // people, settings, overview, backup. Admin answers never carry an account number,
   // except inside a connection code.
   // -------------------------------------------------------------------------------------------
 

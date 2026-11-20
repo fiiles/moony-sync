@@ -26,7 +26,7 @@ function packageVersion(): string {
   return (JSON.parse(readFileSync(url, "utf8")) as { version: string }).version;
 }
 
-/** Environment variables, all optional (spec §5.2). */
+/** Environment variables, all optional (README.md, "Settings"). */
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const port = env.PORT ? Number(env.PORT) : 8787;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("invalid_port");

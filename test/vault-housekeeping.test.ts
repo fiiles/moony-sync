@@ -82,7 +82,7 @@ describe("housekeeping", () => {
   });
 
   it("never deletes a vault for a lapse: blocked for 400 days, housekeep, the vault is still there", async () => {
-    // Replaces "deletes a vault 90 days after the subscription lapsed" (spec 5.4).
+    // The hosted relay deleted a vault 90 days after a lapse; this server never does.
     const t = testApp();
     const v = await newVault(t);
     await push(t, v, ops("d", 1));

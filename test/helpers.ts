@@ -71,7 +71,7 @@ export function addPerson(t: TestApp, name = "Test Person"): Person {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Vault helpers (Task 3)
+// Vault helpers
 // ---------------------------------------------------------------------------------------------
 
 const b64url = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64url");
@@ -194,7 +194,7 @@ export function stream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Admin helpers (Task 6)
+// Admin helpers
 // ---------------------------------------------------------------------------------------------
 
 export const ADMIN_NAME = "Admin";
