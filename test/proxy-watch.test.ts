@@ -36,6 +36,14 @@ describe("proxy watch", () => {
     expect(lines).toEqual(["TRUST_PROXY is on: only your reverse proxy may reach this port", "proxy: a request arrived without forwarding headers while TRUST_PROXY is on; bind the port to the proxy only"]);
   });
 
+  it("TRUST_PROXY on: a request carrying only Forwarded counts as proxied", () => {
+    const lines: string[] = [];
+    const w = createProxyWatch(true, (l) => lines.push(l));
+    w.see(req("/v1/server", { forwarded: "for=203.0.113.5" }));
+    expect(w.warning()).toBeNull();
+    expect(lines).toEqual(["TRUST_PROXY is on: only your reverse proxy may reach this port"]);
+  });
+
   it("/health is not looked at", () => {
     const off = createProxyWatch(false, () => {});
     off.see(req("/health", { "x-forwarded-for": "203.0.113.5" }));

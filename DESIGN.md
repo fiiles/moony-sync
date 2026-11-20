@@ -83,12 +83,14 @@ database.
 | `REQUIRE_2FA` | `0` | `1` makes the admin's second factor mandatory |
 | `SETUP_CODE` | random | Fixed first-run setup code; ignored once an admin exists |
 
-With `TRUST_PROXY=1` the server logs one line at start (`TRUST_PROXY is on: only your reverse
-proxy may reach this port`) and watches two booleans, never an address, header value or path:
-`X-Forwarded-For` / `Forwarded` seen while it is off (`forwarded_untrusted`: every client shares
-the proxy's rate-limit key), or a request without either while it is on (`direct_client`: a client
-that reaches the port itself chooses its own key). Each is logged once and reported as `proxyWarning`
-in the admin overview. `/health` is not looked at; the image's health check uses it.
+The server watches two booleans, never an address, header value or path, whether `TRUST_PROXY` is
+on or off: `X-Forwarded-For` / `Forwarded` seen while it is off (`forwarded_untrusted`: every client
+shares the proxy's rate-limit key), or a request without either while it is on (`direct_client`: a
+client that reaches the port itself chooses its own key). With `TRUST_PROXY=1` a request carrying
+only `Forwarded` counts as proxied, although the rate-limit key itself is taken from
+`X-Forwarded-For` only. Each observation is logged once (with `TRUST_PROXY=1` the server also logs
+one line at start, `TRUST_PROXY is on: only your reverse proxy may reach this port`) and reported
+as `proxyWarning` in the admin overview. `/health` is not looked at; the image's health check uses it.
 
 `TRUST_PROXY` and `REQUIRE_2FA` accept `1`, `0`, `true`, `false` in any case; any other non-empty
 value stops the server at start with a one-line message, because guessing what "yes" means could
@@ -193,8 +195,8 @@ would plug in.
   writes the setting `lockout_cleared_at`, which the server checks on every attempt and, when it
   is newer than the value it last acted on, clears the per-client and overall counters. A
   password re-check by a signed-in admin (change password, enrol or disable the second factor,
-  connection code) is counted against that client only, never against the overall count, and
-  is not refused because the overall count is full.
+  connection code) is counted against that client only, never against the overall count (so at
+  most 5 per 15 minutes per client address), and is not refused because the overall count is full.
 - **Lost password or second factor.** `moony-sync reset-admin` (in the container:
   `docker exec <container> moony-sync reset-admin`) deletes the admin, all sessions and backup
   codes, stores a fresh setup code and prints it. A running server uses the new code on its next

@@ -20,7 +20,7 @@ export function startOrExit(env: NodeJS.ProcessEnv, fail: (line: string) => neve
       return fail("moony-sync: the database was written by a newer version of the server; update the server (do not delete the data)");
     }
     if (e instanceof Error && e.message === "vault_ids_collide_ignoring_case") {
-      return fail("moony-sync: two vault IDs in the database differ only by letter case; the server cannot start until one of them is removed (do not delete the data folder)");
+      return fail("moony-sync: two vault IDs in the database differ only by letter case; the server cannot start until one is removed: open the database with sqlite3, find the rows with SELECT vault_id FROM vaults GROUP BY lower(vault_id) HAVING COUNT(*) > 1, and delete one (do not delete the data folder)");
     }
     throw e;
   }

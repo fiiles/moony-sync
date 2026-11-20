@@ -132,14 +132,11 @@ interface Meta {
   last_activity: number | null;
 }
 
-/** read: pull, snapshot download, rekey bundles (allowed in the grace period, and for a token
- *  that was rotated away less than 30 days ago);
- *  write: needs entitlement and the current token;
- *  owner: the current token only (deleting your data or rotating the token never needs
- *  entitlement). */
 /** What a call needs. `lookup` (vault info, key changes) is open to the current and to a previous
- *  token; `read`, `write` and `owner` need the current token. `lookup` and `read` share the
- *  read entitlement. */
+ *  token; `read` (pull, snapshot download) and `write` need the current token. `lookup` and `read`
+ *  share the read entitlement (allowed in the grace period); `write` also needs entitlement;
+ *  `owner` is the current token only (deleting your data or rotating the token never needs
+ *  entitlement). */
 export type Access = "lookup" | "read" | "write" | "owner";
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
@@ -154,6 +151,7 @@ export function createVaults(
   blobFiles: BlobFiles,
 ): Vaults {
   const kits = kitRows(db);
+  // Test instrumentation: never reset, never exported or logged.
   const stats = { opBytesRead: 0, rekeyBytesRead: 0 };
   const q = {
     meta: db.prepare("SELECT * FROM vaults WHERE vault_id = ?"),

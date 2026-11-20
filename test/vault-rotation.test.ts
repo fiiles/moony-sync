@@ -309,6 +309,26 @@ describe("token rotation", () => {
     expect(page.more).toBe(true);
   });
 
+  it("always returns at least one /rekey bundle, even one larger than the page cap", async () => {
+    const t = testApp();
+    let v = await newVault(t);
+    for (let i = 0; i < 2; i++) {
+      const next = newToken();
+      await rotate(t, v, next, rekeyOf(`b${i}`));
+      v = { ...v, token: next };
+    }
+    // The API caps a bundle at 256 KiB; plant one above the page cap to pin the "at least one" rule.
+    t.db
+      .prepare("UPDATE rekeys SET rekey = ? WHERE vault_id = ? AND rotation = 1")
+      .run(Buffer.alloc(MAX_REKEY_PAGE_BYTES + 1024, 1), v.id);
+    const page = (await (await rekeys(t, v)).json()) as Rekeys & { more: boolean };
+    expect(page.rekeys.map((r) => r.rotation)).toEqual([1]);
+    expect(page.more).toBe(true);
+    const rest = (await (await rekeys(t, v, 1)).json()) as Rekeys & { more: boolean };
+    expect(rest.rekeys.map((r) => r.rotation)).toEqual([2]);
+    expect(rest.more).toBe(false);
+  });
+
   it("lets a token retired long ago come back (no primary key collision)", async () => {
     const t = testApp();
     const v = await newVault(t);

@@ -119,6 +119,7 @@ function attemptLimit(clock: Clock, db: Db) {
   const perClient: Limiter = fixedWindow(PER_CLIENT_ATTEMPTS, ATTEMPT_WINDOW_SECONDS, clock);
   const overall: Limiter = fixedWindow(OVERALL_ATTEMPTS, ATTEMPT_WINDOW_SECONDS, clock);
   let clearedSeen = 0;
+  // Read on every check, not cached: `unlock-admin` runs in another process and writes this setting.
   const applyClear = (): void => {
     const at = Number(getSetting(db, LOCKOUT_CLEARED_AT) ?? 0);
     if (Number.isFinite(at) && at > clearedSeen) {

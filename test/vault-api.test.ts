@@ -86,6 +86,12 @@ describe("vault creation", () => {
       expect(res.status).toBe(409);
       expect(await res.json()).toEqual({ error: "vault_exists" });
     }
+    // The same token with a differently cased ID is refused too (the folded check comes first).
+    const sameToken = await t.call("PUT", `/v1/vaults/${v.id.toLowerCase()}`, {
+      headers: { authorization: `Bearer ${v.token}`, "moony-account": account },
+    });
+    expect(sameToken.status).toBe(409);
+    expect(await sameToken.json()).toEqual({ error: "vault_exists" });
     expect(t.db.prepare("SELECT COUNT(*) AS n FROM vaults").get()).toEqual({ n: 1 });
 
     const snap = await t.call("GET", `/v1/vaults/${v.id}/snapshot`, { headers: auth(v) });
@@ -367,5 +373,18 @@ describe("a pull reads only what it sends", () => {
     expect(page.more).toBe(true);
     expect(t.stores.vaults.stats.opBytesRead).toBe(fit * ct);
     expect(t.stores.vaults.stats.opBytesRead).toBeLessThanOrEqual(MAX_PULL_BYTES + ct);
+  });
+
+  it("cuts a page at limit and says there is more", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const res = await push(t, v, Array.from({ length: 5 }, (_, i) => ({ id: `s-${i}`, ct: b64(`op-${i}`) })));
+    expect(res.status).toBe(200);
+    const page = (await (await pull(t, v, 0, 3)).json()) as PullBody;
+    expect(page.ops.map((o) => o.seq)).toEqual([1, 2, 3]);
+    expect(page.more).toBe(true);
+    const rest = (await (await pull(t, v, 3, 3)).json()) as PullBody;
+    expect(rest.ops.map((o) => o.seq)).toEqual([4, 5]);
+    expect(rest.more).toBe(false);
   });
 });

@@ -49,15 +49,11 @@ describe("startOrExit", () => {
       ins.run("abcdefghijklmnopqrstuv");
       db.close();
       expect(() => openDb(dir)).toThrow("vault_ids_collide_ignoring_case");
-      try {
-        openDb(dir);
-      } catch (e) {
-        expect(String(e instanceof Error ? e.message : e)).not.toMatch(/abcdefghijklmnopqrstuv/i);
-      }
       const lines: string[] = [];
       expect(() => startOrExit({ DATA_DIR: dir }, failing(lines))).toThrow(Exit);
       expect(lines).toHaveLength(1);
       expect(lines[0]).toContain("letter case");
+      expect(lines[0]).toContain("HAVING COUNT(*) > 1");
       expect(lines[0]).not.toMatch(/\n|\bat |abcdefghijklmnopqrstuv/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });

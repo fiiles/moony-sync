@@ -52,15 +52,15 @@ DATA_DIR=./data PORT=8787 node dist/main.js
    `Setup code:`), a name for the admin and a password of at least 10 characters. While there is
    no admin the server prints a new random code at every start, so always read the latest line.
    A code written by `reset-admin` is the exception: it stays valid across restarts until used.
-2. If a reverse proxy stands in front (see [https](#https-behind-a-reverse-proxy)), publish the
+3. If a reverse proxy stands in front (see [https](#https-behind-a-reverse-proxy)), publish the
    port to the proxy only (`127.0.0.1:8787:8787` in `compose.yml`) and set `TRUST_PROXY=1`. The
    overview shows a warning when the server sees either half of this done wrong.
-3. The overview asks you to confirm the **address apps use** before you can add anyone. It is
+4. The overview asks you to confirm the **address apps use** before you can add anyone. It is
    pre-filled with the address your browser is using right now, which is only right if the apps
    will reach the server the same way (see [https](#https-behind-a-reverse-proxy)). Confirm it or
    type the real one, for example `https://sync.example.com`. Set `PUBLIC_URL` to have it ready,
    and change it later under Settings.
-4. Optional but sensible: Settings, turn on the second factor (an authenticator app). It gives
+5. Optional but sensible: Settings, turn on the second factor (an authenticator app). It gives
    you ten one-time backup codes, shown once.
 
 The admin is one account. There are no other admins and no e-mail: a forgotten password is fixed
@@ -117,7 +117,9 @@ What `TRUST_PROXY=1` does:
   address by sending the header. Publish the port to the proxy only for the same reason.
 - The overview warns about both mistakes, from request headers alone (nothing is stored or
   logged about the client): forwarding headers arriving while `TRUST_PROXY` is off, and a request
-  without them while it is on. The server also logs each warning once.
+  without them while it is on. The server also logs each warning once. With `TRUST_PROXY` on, a
+  monitor or `curl` that reaches the published port directly raises the second warning; only
+  `/health` is exempt.
 
 ### Caddy
 

@@ -627,9 +627,11 @@ describe("admin lockout", () => {
     const r = await s.call("POST", "password", { current: ADMIN_PASSWORD, next: "a brand new password" });
     expect(r.status).toBe(204);
     // the connection code check is a re-check too
+    expect((await s.call("PUT", "settings", { publicUrl: "https://sync.example.com" })).status).toBe(200);
     const person = t.stores.people.create("Someone");
     const c = await s.call("POST", `people/${person.id}/connection-code`, { password: "a brand new password" });
-    expect(c.status).not.toBe(429);
+    expect(c.status).toBe(200);
+    expect(((await c.json()) as { connectionCode: string }).connectionCode).toMatch(/^moony-sync1:/);
   });
 
   it("a logged-in admin's re-checks do not count against the overall limit", async () => {

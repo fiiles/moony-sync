@@ -286,7 +286,7 @@ export function adminRoutes(deps: AppDeps, stores: Stores, auth: Auth, budget: B
     if (!p) return personNotFound();
     const b = await readObject(c);
     if (b instanceof Response) return b;
-    // The same password check and attempt limit as the login.
+    // A password re-check by a signed-in admin: counted per client address only, not by the overall count.
     const ok = await auth.verifyPassword(who(c), b.password);
     if (!ok.ok) return errorResponse(ok.status, ok.error);
     const url = address();
