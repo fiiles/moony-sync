@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/fiiles/Moony-relay/security/policy
+    about: Please do not file security problems as public issues. Follow the security policy.
+  - name: A problem with the Moony app itself
+    url: https://github.com/fiiles/Moony/issues/new/choose
+    about: Bugs in the app (not the sync server) belong in the Moony repository.
