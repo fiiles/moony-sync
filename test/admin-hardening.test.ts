@@ -192,3 +192,19 @@ describe("reset-admin without a database", () => {
     }
   });
 });
+
+describe("unlock-admin without a database", () => {
+  it("refuses with one line and creates nothing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "moony-cli-"));
+    try {
+      const dataDir = join(dir, "data");
+      const out: string[] = [];
+      const err: string[] = [];
+      const code = runCli(["unlock-admin"], { DATA_DIR: dataDir }, (l) => out.push(l), (l) => err.push(l));
+      expect([code, out.length, err.length]).toEqual([1, 0, 1]);
+      expect(existsSync(dataDir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

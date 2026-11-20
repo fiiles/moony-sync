@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// `moony-sync reset-admin`: for a lost password or second factor. Works while the server runs
-// (SQLite WAL lets a second process write); the server reads the new setup code on its next call.
+// `moony-sync reset-admin` (lost password or second factor) and `moony-sync unlock-admin` (clear
+// the login lockout). Both work while the server runs (SQLite WAL lets a second process write);
+// the server reads the new setup code and the lockout signal on its next call.
 
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resetAdmin } from "./admin/auth.js";
+import { clearLockout, resetAdmin } from "./admin/auth.js";
 import { loadConfig } from "./config.js";
 import { openDb } from "./db.js";
 
@@ -16,8 +17,12 @@ export function runCli(
   err: (line: string) => void,
 ): number {
   const command = args[0];
-  if (command !== "reset-admin") {
-    err(command ? `unknown command: ${command} (try: moony-sync reset-admin)` : "usage: moony-sync reset-admin");
+  if (command !== "reset-admin" && command !== "unlock-admin") {
+    err(
+      command
+        ? `unknown command: ${command} (try: moony-sync reset-admin | unlock-admin)`
+        : "usage: moony-sync reset-admin | unlock-admin",
+    );
     return 1;
   }
   const dataDir = loadConfig(env).dataDir;
@@ -28,7 +33,12 @@ export function runCli(
   }
   const db = openDb(dataDir);
   try {
-    out(`Setup code: ${resetAdmin(db)}`);
+    if (command === "unlock-admin") {
+      clearLockout(db);
+      out("Login attempts were reset.");
+    } else {
+      out(`Setup code: ${resetAdmin(db)}`);
+    }
     return 0;
   } finally {
     db.close();

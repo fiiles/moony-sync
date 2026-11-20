@@ -14,6 +14,8 @@ export interface Limiter {
    *  null comes back). The returned function gives the hit back, in the same window only. For
    *  work that must be counted before it starts (a slow check), refunded when it succeeds. */
   reserve(key: string): (() => void) | null;
+  /** Forgets every count of the current window (an operator's unlock). */
+  clear(): void;
 }
 
 /** At most `limit` hits per key in each window of `periodSeconds`. Entries of finished windows
@@ -29,6 +31,9 @@ export function fixedWindow(limit: number, periodSeconds: number, clock: Clock):
     }
   };
   return {
+    clear() {
+      counts = new Map();
+    },
     hit(key) {
       roll();
       const n = (counts.get(key) ?? 0) + 1;

@@ -228,7 +228,17 @@ in the container can do this; that is the intended recovery, and the server neve
 
 Login, setup code and second-factor attempts are limited per client address and across all
 clients. These counters are **in memory**: a lockout lasts up to 15 minutes or until the server
-restarts, whichever comes first. `reset-admin` does not clear it.
+restarts, whichever comes first, unless you clear it:
+
+```bash
+docker compose exec moony-sync moony-sync unlock-admin
+# prints: Login attempts were reset.
+```
+
+`unlock-admin` clears the login, setup code and second-factor counters of a running server (it
+does not touch the admin, sessions or data); `reset-admin` clears them too. A password check by an
+admin who is already signed in (change password, second factor, connection code) is counted
+against that client address only, so strangers' failed logins never refuse it.
 
 ## Settings (environment variables)
 
@@ -271,6 +281,9 @@ nothing for 30 seconds is aborted with `408 {"error":"body_timeout"}`. With `TRU
 
 ## Known limits
 
+- **Anyone can lock the login.** On a home network anyone who can reach the server can keep the
+  admin login refused (50 wrong attempts per 15 minutes) until the operator runs
+  `moony-sync unlock-admin`.
 - **No Host allowlist.** A web page that rebinds its DNS name to your server's LAN address can
   reach the **unauthenticated** routes of a LAN-only server through a visitor's browser. Neither
   https nor keeping the address secret prevents that. What protects the server is that setup

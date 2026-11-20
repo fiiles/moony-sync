@@ -562,3 +562,93 @@ describe("reset-admin", () => {
     }
   });
 });
+
+describe("admin lockout", () => {
+  const run = (t: TestApp, args: string[]) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = runCli(args, { DATA_DIR: t.dataDir }, (l) => out.push(l), (l) => err.push(l));
+    return { code, out, err };
+  };
+  const badLogin = (t: TestApp, ip: string) =>
+    anon(t).call("POST", "login", { name: ADMIN_NAME, password: "wrong password!" }, { clientAddress: ip });
+  /** Fills the overall counter with failures from fifty different addresses. */
+  async function fillOverall(t: TestApp): Promise<void> {
+    for (let i = 0; i < 50; i++) expect((await badLogin(t, `198.51.100.${i}`)).status).toBe(401);
+  }
+  const goodLogin = (t: TestApp, ip: string) =>
+    anon(t).call("POST", "login", { name: ADMIN_NAME, password: ADMIN_PASSWORD }, { clientAddress: ip });
+
+  it("unlock-admin clears a full lockout on a running server", async () => {
+    const t = testApp();
+    await setupAdmin(t);
+    await fillOverall(t);
+    expect((await goodLogin(t, "203.0.113.7")).status).toBe(429);
+    const r = run(t, ["unlock-admin"]);
+    expect([r.code, r.out, r.err]).toEqual([0, ["Login attempts were reset."], []]);
+    expect((await goodLogin(t, "203.0.113.7")).status).toBe(204);
+    // the per-client counter is cleared too
+    for (let i = 0; i < 5; i++) expect((await badLogin(t, "203.0.113.8")).status).toBe(401);
+    expect((await badLogin(t, "203.0.113.8")).status).toBe(429);
+    expect(run(t, ["unlock-admin"]).code).toBe(0);
+    expect((await badLogin(t, "203.0.113.8")).status).toBe(401);
+  });
+
+  it("unlock-admin clears the setup counters too", async () => {
+    const t = testApp();
+    for (let i = 0; i < 5; i++) {
+      await anon(t).call("POST", "setup", { code: "WRONG", name: "A", password: ADMIN_PASSWORD }, { clientAddress: "203.0.113.9" });
+    }
+    const code = setupCodeFrom(t);
+    const setup = () =>
+      anon(t).call("POST", "setup", { code, name: ADMIN_NAME, password: ADMIN_PASSWORD }, { clientAddress: "203.0.113.9" });
+    expect((await setup()).status).toBe(429);
+    expect(run(t, ["unlock-admin"]).code).toBe(0);
+    expect((await setup()).status).toBe(204);
+  });
+
+  it("reset-admin clears the lockout too", async () => {
+    const t = testApp();
+    await setupAdmin(t);
+    await fillOverall(t);
+    const r = run(t, ["reset-admin"]);
+    expect(r.code).toBe(0);
+    const m = /^Setup code: ([A-Z2-7]{24})$/.exec(r.out[0]!);
+    const fresh = await anon(t).call("POST", "setup", { code: m![1], name: ADMIN_NAME, password: ADMIN_PASSWORD });
+    expect(fresh.status).toBe(204);
+    expect((await goodLogin(t, "203.0.113.7")).status).toBe(204);
+  });
+
+  it("a logged-in admin's password re-check is not refused by strangers' failures", async () => {
+    const t = testApp();
+    const s = await setupAdmin(t);
+    await fillOverall(t);
+    expect((await goodLogin(t, "203.0.113.7")).status).toBe(429);
+    const r = await s.call("POST", "password", { current: ADMIN_PASSWORD, next: "a brand new password" });
+    expect(r.status).toBe(204);
+    // the connection code check is a re-check too
+    const person = t.stores.people.create("Someone");
+    const c = await s.call("POST", `people/${person.id}/connection-code`, { password: "a brand new password" });
+    expect(c.status).not.toBe(429);
+  });
+
+  it("a logged-in admin's re-checks do not count against the overall limit", async () => {
+    const t = testApp();
+    const s = await setupAdmin(t);
+    for (let i = 0; i < 5; i++) {
+      expect((await s.call("POST", "password", { current: "wrong password!", next: "a brand new password" })).status).toBe(401);
+    }
+    // nothing of those five reached the overall counter: forty-five more strangers still fit
+    for (let i = 0; i < 45; i++) expect((await badLogin(t, `198.51.100.${i}`)).status).toBe(401);
+    expect((await goodLogin(t, "203.0.113.7")).status).toBe(204);
+  });
+
+  it("a logged-in admin's wrong re-checks still lock that client after five", async () => {
+    const t = testApp();
+    const s = await setupAdmin(t);
+    for (let i = 0; i < 5; i++) {
+      expect((await s.call("POST", "password", { current: "wrong password!", next: "a brand new password" })).status).toBe(401);
+    }
+    expect((await s.call("POST", "password", { current: ADMIN_PASSWORD, next: "a brand new password" })).status).toBe(429);
+  });
+});

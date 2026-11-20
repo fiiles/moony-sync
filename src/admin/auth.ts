@@ -42,13 +42,26 @@ export function setSetting(db: Db, key: string, value: string): void {
   );
 }
 
+/** The setting a running server watches to clear its admin attempt counters (unix seconds). */
+const LOCKOUT_CLEARED_AT = "lockout_cleared_at";
+
+/** Asks a running server to forget its admin login attempt counters (`moony-sync unlock-admin`).
+ *  The counters live in that process's memory, so the signal goes through `settings`. */
+export function clearLockout(db: Db): void {
+  // never equal to the previous value, so two unlocks within one second are both seen
+  const previous = Number(getSetting(db, LOCKOUT_CLEARED_AT) ?? 0) || 0;
+  setSetting(db, LOCKOUT_CLEARED_AT, String(Math.max(Math.floor(Date.now() / 1000), previous + 1)));
+}
+
 /** Removes the admin, every session and the second factor (people and data stay), and leaves a
- *  fresh setup code in `settings` for a running server to pick up. Returns the code. */
+ *  fresh setup code in `settings` for a running server to pick up. Also clears the attempt
+ *  counters. Returns the code. */
 export function resetAdmin(db: Db): string {
   const code = randomBase32(24);
   db.transaction(() => {
     db.exec("DELETE FROM admin; DELETE FROM admin_sessions; DELETE FROM backup_codes");
     setSetting(db, "setup_code", code);
+    clearLockout(db);
   })();
   return code;
 }
@@ -83,7 +96,7 @@ export interface Auth {
   enrol(s: SessionInfo, who: string, password: unknown): Promise<Result<{ secret: string; otpauthUrl: string }>>;
   confirm(s: SessionInfo, who: string, totp: unknown): Result<{ backupCodes: string[] }>;
   disable(s: SessionInfo, who: string, password: unknown): Promise<Result>;
-  /** Re-checks the admin's password for a sensitive action (shares the login attempt limit). */
+  /** Re-checks the signed-in admin's password for a sensitive action (counted per client only). */
   verifyPassword(who: string, password: unknown): Promise<Result>;
 }
 
@@ -98,19 +111,36 @@ interface AdminRow {
 /** Attempt quotas per client address and across all clients. Slow checks (Argon2) use
  *  `reserve`: the attempt is counted before the work starts, so parallel requests cannot all
  *  pass the check, and the refund on success means only failures stay counted. Fast checks
- *  use `locked` then `failed` (nothing awaits in between). */
-function attemptLimit(clock: Clock) {
+ *  use `locked` then `failed` (nothing awaits in between). `lockout_cleared_at` in `settings`
+ *  (written by the command line tool) clears both counters when it is newer than the last
+ *  value acted on. A signed-in admin's password re-check passes `clientOnly`: it is counted
+ *  against that client alone and not refused because strangers filled the overall count. */
+function attemptLimit(clock: Clock, db: Db) {
   const perClient: Limiter = fixedWindow(PER_CLIENT_ATTEMPTS, ATTEMPT_WINDOW_SECONDS, clock);
   const overall: Limiter = fixedWindow(OVERALL_ATTEMPTS, ATTEMPT_WINDOW_SECONDS, clock);
+  let clearedSeen = 0;
+  const applyClear = (): void => {
+    const at = Number(getSetting(db, LOCKOUT_CLEARED_AT) ?? 0);
+    if (Number.isFinite(at) && at > clearedSeen) {
+      clearedSeen = at;
+      perClient.clear();
+      overall.clear();
+    }
+  };
   return {
-    locked: (who: string): boolean => perClient.over(who) || overall.over("*"),
+    locked(who: string): boolean {
+      applyClear();
+      return perClient.over(who) || overall.over("*");
+    },
     failed(who: string): void {
       perClient.hit(who);
       overall.hit("*");
     },
-    reserve(who: string): (() => void) | null {
+    reserve(who: string, clientOnly = false): (() => void) | null {
+      applyClear();
       const client = perClient.reserve(who);
       if (!client) return null;
+      if (clientOnly) return client;
       const all = overall.reserve("*");
       if (!all) {
         client();
@@ -129,9 +159,9 @@ export const MAX_CONCURRENT_VERIFICATIONS = 4;
 
 export function createAuth(deps: { config: Config; db: Db; clock: Clock }): Auth {
   const { config, db, clock } = deps;
-  const setupLimit = attemptLimit(clock);
-  const passwordLimit = attemptLimit(clock); // login, password change, 2fa disable
-  const totpLimit = attemptLimit(clock);
+  const setupLimit = attemptLimit(clock, db);
+  const passwordLimit = attemptLimit(clock, db); // login, password change, 2fa disable
+  const totpLimit = attemptLimit(clock, db);
   const rateLimited = () => fail(429, "rate_limited");
 
   const startupCode = config.setupCode ?? randomBase32(24);
@@ -174,10 +204,11 @@ export function createAuth(deps: { config: Config; db: Db; clock: Clock }): Auth
     return token;
   }
 
-  /** Checks the admin's current password for a signed-in admin. The attempt is reserved before
-   *  the Argon2 work and refunded when the password is right. */
+  /** Checks the admin's current password for a signed-in admin (every caller is behind the
+   *  session guard). The attempt is reserved before the Argon2 work, against that client only,
+   *  and refunded when the password is right. */
   async function checkPassword(who: string, password: unknown): Promise<Result> {
-    const refund = passwordLimit.reserve(who);
+    const refund = passwordLimit.reserve(who, true);
     if (!refund) return rateLimited();
     const a = admin();
     if (a === undefined || typeof password !== "string" || password.length > MAX_PASSWORD) {

@@ -13,6 +13,18 @@ describe("fixedWindow", () => {
   });
 });
 
+describe("fixedWindow.clear", () => {
+  it("forgets every count in the current window", () => {
+    const l = fixedWindow(1, 60, () => 1000);
+    l.hit("a");
+    l.hit("b");
+    expect([l.over("a"), l.over("b")]).toEqual([true, true]);
+    l.clear();
+    expect([l.over("a"), l.over("b")]).toEqual([false, false]);
+    expect(l.reserve("a")).not.toBeNull();
+  });
+});
+
 describe("fixedWindow.reserve", () => {
   it("counts before the work, refuses past the limit, and refunds in the same window only", () => {
     let now = 1000;

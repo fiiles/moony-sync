@@ -189,11 +189,17 @@ would plug in.
 - **Guessing.** Setup code, password and second-factor attempts are counted per client address (5
   per 15 minutes) and across all clients (50 per 15 minutes); beyond that `429 rate_limited`.
   Argon2 work is limited to 4 concurrent verifications. The counters live in memory: a lockout
-  lasts up to 15 minutes or until restart.
+  lasts up to 15 minutes or until restart, or until `moony-sync unlock-admin` (or `reset-admin`)
+  writes the setting `lockout_cleared_at`, which the server checks on every attempt and, when it
+  is newer than the value it last acted on, clears the per-client and overall counters. A
+  password re-check by a signed-in admin (change password, enrol or disable the second factor,
+  connection code) is counted against that client only, never against the overall count, and
+  is not refused because the overall count is full.
 - **Lost password or second factor.** `moony-sync reset-admin` (in the container:
   `docker exec <container> moony-sync reset-admin`) deletes the admin, all sessions and backup
   codes, stores a fresh setup code and prints it. A running server uses the new code on its next
-  call. People, accounts and data are untouched. It does not clear the in-memory counters.
+  call. People, accounts and data are untouched. It also clears the attempt counters, like
+  `unlock-admin`.
 - One admin; no roles.
 - Over plain http the admin password and session cookie cross the network in clear text; the
   overview reports `insecure` when the page was loaded over http from a host other than
