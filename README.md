@@ -119,7 +119,10 @@ What `TRUST_PROXY=1` does:
   logged about the client): forwarding headers arriving while `TRUST_PROXY` is off, and a request
   without them while it is on. The server also logs each warning once. With `TRUST_PROXY` on, a
   monitor or `curl` that reaches the published port directly raises the second warning; only
-  `/health` is exempt.
+  `/health` is exempt. A warning stays until the server is restarted (it never clears by
+  itself), so after you have fixed the port binding or the setting, restart the server and the
+  banner goes away. The first warning is a hint, not proof: any client can send a forwarding
+  header while `TRUST_PROXY` is off.
 
 ### Caddy
 
@@ -242,6 +245,9 @@ does not touch the admin, sessions or data); `reset-admin` clears them too. A pa
 admin who is already signed in (change password, second factor, connection code) is counted
 against that client address only, so strangers' failed logins never refuse it.
 
+Behind a reverse proxy without `TRUST_PROXY=1` all clients share one address, so five wrong logins
+from anyone lock the login for 15 minutes for everybody; `unlock-admin` clears that too.
+
 ## If the server refuses to start
 
 Two vault IDs in the database that differ only by letter case (a database from before IDs were
@@ -249,15 +255,19 @@ unique ignoring case) stop the server with one line. Stop the container, back up
 then open the database with `sqlite3 <data folder>/moony-sync.db` and run:
 
 ```sql
-SELECT vault_id FROM vaults WHERE lower(vault_id) IN
-  (SELECT lower(vault_id) FROM vaults GROUP BY 1 HAVING COUNT(*) > 1);
+SELECT vault_id, head, last_activity FROM vaults WHERE lower(vault_id) IN
+  (SELECT lower(vault_id) FROM vaults GROUP BY 1 HAVING COUNT(*) > 1) ORDER BY lower(vault_id);
 PRAGMA foreign_keys=ON;
 DELETE FROM vaults WHERE vault_id = '<the spelling to remove>';
 ```
 
 `PRAGMA foreign_keys=ON` must come first: the `sqlite3` tool starts with it off, and without it the
 vault's ops, key changes and snapshot and blob records stay behind. Its snapshot and blob files are
-removed by the server's next clean-up. Then start the server.
+removed by the server's next clean-up, once they are an hour old. Then start the server.
+
+Delete the spelling the person's devices do not use. A device shows its vault ID only inside the
+app, so in practice delete the one with the older `last_activity` (a unix time; `NULL` means it
+never had any) or the lower `head` (the number of ops it has received; `0` means none).
 
 ## Settings (environment variables)
 
@@ -302,7 +312,9 @@ nothing for 30 seconds is aborted with `408 {"error":"body_timeout"}`. With `TRU
 
 - **Anyone can lock the login.** On a home network anyone who can reach the server can keep the
   admin login refused (50 wrong attempts per 15 minutes) until the operator runs
-  `moony-sync unlock-admin`.
+  `moony-sync unlock-admin`. Behind a reverse proxy without `TRUST_PROXY=1` all clients share one
+  address, so five wrong logins from anyone lock the login for 15 minutes; `unlock-admin` clears
+  that too.
 - **No Host allowlist.** A web page that rebinds its DNS name to your server's LAN address can
   reach the **unauthenticated** routes of a LAN-only server through a visitor's browser. Neither
   https nor keeping the address secret prevents that. What protects the server is that setup

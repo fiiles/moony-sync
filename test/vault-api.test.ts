@@ -371,8 +371,35 @@ describe("a pull reads only what it sends", () => {
     expect(page.ops.map((o) => o.id)).toEqual(Array.from({ length: fit }, (_, i) => `big-${i}`));
     expect(page.head).toBe(60);
     expect(page.more).toBe(true);
+    // The ciphertext that comes back is exactly what was pushed.
+    expect(page.ops[0]!.ct).toBe(body(0).ct);
+    expect(page.ops[fit - 1]!.ct).toBe(body(fit - 1).ct);
     expect(t.stores.vaults.stats.opBytesRead).toBe(fit * ct);
     expect(t.stores.vaults.stats.opBytesRead).toBeLessThanOrEqual(MAX_PULL_BYTES + ct);
+  });
+
+  it("returns a single op whose charge exceeds the page budget alone, and the next page continues after it", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const res = await push(t, v, Array.from({ length: 3 }, (_, i) => ({ id: `o-${i}`, ct: b64(`op-${i}`) })));
+    expect(res.status).toBe(200);
+    // The API caps an op at 192 KiB, so plant one oversized row directly.
+    const huge = Buffer.alloc(MAX_PULL_BYTES + 10, 7);
+    t.db
+      .prepare("UPDATE ops SET ct = ?, size = ? WHERE vault_id = ? AND seq = 2")
+      .run(huge, huge.byteLength + OP_OVERHEAD_BYTES, v.id);
+
+    const first = (await (await pull(t, v, 0, 1000)).json()) as PullBody;
+    expect(first.ops.map((o) => o.seq)).toEqual([1]);
+    expect(first.more).toBe(true);
+    const page = (await (await pull(t, v, 1, 1000)).json()) as PullBody;
+    expect(page.ops.map((o) => o.seq)).toEqual([2]);
+    expect(page.ops[0]!.ct).toBe(huge.toString("base64"));
+    expect(page.more).toBe(true);
+    const rest = (await (await pull(t, v, 2, 1000)).json()) as PullBody;
+    expect(rest.ops.map((o) => o.seq)).toEqual([3]);
+    expect(rest.ops[0]!.ct).toBe(b64("op-2"));
+    expect(rest.more).toBe(false);
   });
 
   it("cuts a page at limit and says there is more", async () => {

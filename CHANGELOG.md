@@ -28,7 +28,9 @@ All notable changes to the Moony sync server are documented in this file. The fo
 - **`moony-sync unlock-admin` clears the admin login lockout** of a running server (`reset-admin`
   does too), and a signed-in admin's password re-check is no longer refused because strangers
   filled the shared counter.
-- **A pull reads only what it sends.** The server picks the page by stored sizes and reads the ciphertext of those ops only (the same for key changes), so one request no longer loads up to 190 MiB into memory.
+- **A pull reads only what it sends.** The server picks the page by stored sizes and reads the
+  ciphertext of those ops only (the same for key changes), so one request no longer loads up to
+  190 MiB into memory.
 - **Vault IDs are unique ignoring letter case**, so two profiles can never share a folder on a
   file system that ignores case. A database that already holds two such IDs stops the server at
   start-up with one line (no IDs in it).
