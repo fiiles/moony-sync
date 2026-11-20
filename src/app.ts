@@ -20,7 +20,7 @@ import { createVaults, type Vaults } from "./vaults.js";
 import { syncRoutes } from "./sync-api.js";
 import { createStaticHandler, DEFAULT_UI_DIR } from "./static.js";
 
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 /** Optional capabilities of this server; a server without the field has none. */
 export const FEATURES = ["blobs", "kit"] as const;
 

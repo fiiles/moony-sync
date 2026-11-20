@@ -76,9 +76,10 @@ describe("startHousekeeping", () => {
     const next = newToken();
     expect((await rotate(t, v, next)).status).toBe(200);
     t.clock.now += 30 * DAY - 1;
-    expect((await pull(t, v)).status).toBe(200);
+    const info = (x: typeof v) => t.call("GET", `/v1/vaults/${x.id}`, { headers: auth(x) });
+    expect((await info(v)).status).toBe(200);
     t.clock.now += 2;
-    expect((await pull(t, v)).status).toBe(401);
+    expect((await info(v)).status).toBe(401);
     expect((await pull(t, { ...v, token: next })).status).toBe(200);
   });
 

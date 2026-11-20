@@ -8,7 +8,7 @@ You run it yourself (see `README.md`). It is one Node process with one data fold
 for the person who runs it, and the sync API the Moony apps talk to. User-facing wording is "sync
 server"; "relay" is an internal name that survives in some code.
 
-`GET /v1/server` answers `protocol: 2`: the sync API of v1.1 below, plus the server-address
+`GET /v1/server` answers `protocol: 3`: the sync API of v1.1 below, plus the server-address
 discovery and the changes in "Changes to the v1.1 API". An app that needs that protocol refuses an
 older server.
 
@@ -127,7 +127,8 @@ A **vault** is one encrypted Moony profile. The **vault token** proves the calle
 key. Revoking a device = the client creates a new vault key epoch and calls
 `POST /v1/vaults/:id/token` with the new token and a **rekey bundle** (opaque ciphertext the
 server stores for the other devices). The retired token stays valid, read-only, for 30 days so
-devices that have not noticed yet can still pull and fetch the bundle; then it is forgotten.
+devices that have not noticed yet can still read the vault's info and fetch the key changes (the
+bundle); everything else needs the current token. Then it is forgotten.
 
 ### Entitlement seam
 
@@ -141,7 +142,8 @@ would plug in.
 - **Writes** (push ops, snapshots, creating a vault) need `paidUntil > now` and the current token:
   `402 payment_required` otherwise.
 - **Reads** (pull ops, fetch snapshot, rekey bundles, vault info) are allowed until 30 days after
-  `paidUntil`, so a blocked person's device can still be restored.
+  `paidUntil`, so a blocked person's device can still be restored. Pull and snapshot (and the blob
+  reads) need the current token; a previous token reads only the vault info and the rekey bundles.
 - **Token rotation and vault deletion** need the current token only, no entitlement. A previous
   (read-only) token can do neither.
 - **Blocking never deletes.** There is no retention deletion by age: data goes when the admin
@@ -259,7 +261,7 @@ The sync API is the v1.1 API (below) with these differences:
 
 | Change | Detail |
 |---|---|
-| `GET /v1/server` | No auth. → `{"name": "moony-sync", "version": "<semver>", "protocol": 2, "mode": "self_hosted", "features": ["blobs", "kit"]}`. The app uses it to confirm an address is a Moony sync server. `features` lists optional capabilities (`blobs`: the blob endpoints; `kit`: the Recovery Kit endpoints and the `kit` of a rotation); the protocol stays 2, and a server without the field has no features. Rate-limited like account lookups. |
+| `GET /v1/server` | No auth. → `{"name": "moony-sync", "version": "<semver>", "protocol": 3, "mode": "self_hosted", "features": ["blobs", "kit"]}`. The app uses it to confirm an address is a Moony sync server. `features` lists optional capabilities (`blobs`: the blob endpoints; `kit`: the Recovery Kit endpoints and the `kit` of a rotation); the protocol stays 3, and a server without the field has no features. Rate-limited like account lookups. |
 | `POST /v1/accounts` | `403 registration_closed`. |
 | `POST /v1/accounts/me/checkout` | `409 self_hosted` (so older app builds keep working); `400 missing_account` without the header. |
 | `DELETE /v1/accounts/me` | `403 managed_by_operator`: the admin owns the person record. |
@@ -287,17 +289,17 @@ Headers: `Moony-Account: <account number>` for account calls and vault creation;
 | Method | Path | Notes |
 |---|---|---|
 | `PUT` | `/v1/vaults/:vaultId` | Create (idempotent for the same account + token). Needs `Moony-Account` + `Authorization`; the person must be entitled (`402 payment_required` when blocked), at most 5 vaults (`403 vault_limit_reached`). → `201` / `200`. `409 vault_exists` for another account or token, `409 vault_deleting` while a deletion is unfinished. |
-| `GET` | `/v1/vaults/:vaultId` | → `{"head", "floor", "snapshotSeq", "paidUntil", "bytes", "rotation", "kit"}`. `rotation` is the latest rotation number (0 = never rotated); a device that sees it rise fetches the rekey bundles. `kit` is `{"since", "lastRead"}` (when the current Kit token was set; the minute of its last successful read, or `null`) or `null` when the vault has no Recovery Kit. |
+| `GET` | `/v1/vaults/:vaultId` | Current or previous token. → `{"head", "floor", "snapshotSeq", "paidUntil", "bytes", "rotation", "kit"}`. `rotation` is the latest rotation number (0 = never rotated); a device that sees it rise fetches the rekey bundles. `kit` is `{"since", "lastRead"}` (when the current Kit token was set; the minute of its last successful read, or `null`) or `null` when the vault has no Recovery Kit. |
 | `POST` | `/v1/vaults/:vaultId/ops` | Push. Body `{"ops": [{"id": "<op id>", "ct": "<base64>"}]}` → `{"head": n, "accepted": k}`. Duplicate op IDs are ignored (safe retries) while the op is still stored; after pruning the server no longer knows the ID, so clients must treat re-applying an op as harmless (per-column LWW already is). `413 quota_exceeded` past 256 MiB of op bytes, where each stored op is charged its ciphertext plus 128 bytes (the vault info `bytes` and the admin's space figures are this charge). |
-| `GET` | `/v1/vaults/:vaultId/ops?after=<seq>&limit=<n>` | Pull. → `{"ops": [{"seq", "id", "ct"}], "head", "more"}`. `410 snapshot_required` when `after < floor`. |
+| `GET` | `/v1/vaults/:vaultId/ops?after=<seq>&limit=<n>` | Pull. Current token only (`403 token_read_only` for a previous one, judged before the floor). → `{"ops": [{"seq", "id", "ct"}], "head", "more"}`. `410 snapshot_required` when `after < floor`. |
 | `PUT` | `/v1/vaults/:vaultId/snapshot?seq=<S>` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 snapshot_too_large` over 100 MiB). `S` = the op seq the snapshot includes (`400 snapshot_ahead_of_head`, `409 snapshot_outdated`; `507 server_full` when the data volume would have less than 1 GiB free after it, counting the uploads still in progress). The body streams to disk; a body that ends early is `400 incomplete_body`. |
-| `GET` | `/v1/vaults/:vaultId/snapshot` | Raw bytes; `Moony-Snapshot-Seq` header. `404 no_snapshot` when none. |
+| `GET` | `/v1/vaults/:vaultId/snapshot` | Current token only (`403 token_read_only` for a previous one). Raw bytes; `Moony-Snapshot-Seq` header. `404 no_snapshot` when none. |
 | `POST` | `/v1/vaults/:vaultId/token` | Rotate. Body `{"token": "<new 43-char token>", "rekey": "<base64, ≤ 256 KiB decoded>", "kit"?: {"envelope": "<base64, ≤ 256 KiB decoded>", "token"?: "<43-char Kit token>"}}` (body at most 768 KiB). `kit` is required on a vault that has a Recovery Kit (`400 kit_required`) and is described under *Recovery Kit*. The **current** token authorises; no entitlement needed. One transaction: the current token's hash becomes a previous token (read-only for 30 days), the new hash becomes current, the bundle is stored with the next rotation number (1, 2, …), the vault head at that moment and the time. → `200 {"rotation": n, "head": h}`. A previous token gets `403 token_read_only` (so of two concurrent rotations the second fails); a wrong token `401 unauthorized`; a malformed or already-used new token `400 invalid_token`; a missing or malformed bundle `400 invalid_rekey`; a bundle over 256 KiB `413 rekey_too_large`; a vault already holding 32 bundles `409 too_many_rotations` (housekeeping frees slots). |
 | `GET` | `/v1/vaults/:vaultId/rekey?after=<n>&limit=<k>` | Current or previous token. → `{"rekeys": [{"rotation", "head", "at", "rekey"}], "more": bool}` for rotations greater than `n` (default 0), oldest first; `limit` default 8, max 32, page cut at ~4 MiB of bundles (`more` says to ask again with the last `rotation`). Bundles older than 30 days are gone. |
 | `DELETE` | `/v1/vaults/:vaultId` | Current token only. Wipes ops, snapshots, blobs and the vault record; frees the account slot. |
 
-A previous token may `GET` the vault, pull ops, fetch the snapshot and fetch rekey bundles; every
-other call gets `403 {"error": "token_read_only"}` (except `GET /kit`, which takes no vault token at
+A previous token may `GET` the vault and fetch rekey bundles; every
+other call (pull, snapshot, blob reads included) gets `403 {"error": "token_read_only"}` (except `GET /kit`, which takes no vault token at
 all: `401`). Thirty days after the rotation that retired it
 a previous token is unknown (`401 unauthorized`) and housekeeping deletes it and its bundle. Ops
 pushed with the current token after a rotation are accepted as usual; the server never parses ops.
@@ -343,7 +345,7 @@ existing blob; an ID can be used again after its blob was deleted (a new upload 
 | Method | Path | Notes |
 |---|---|---|
 | `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes, `413 quota_exceeded` when the vault's blobs plus this one would pass its quota, `429 too_many_uploads` when two uploads of the vault are already running). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it, counting the uploads still in progress. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
-| `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current or previous token, also in the read grace. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
+| `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current token only (`403 token_read_only` for a previous one), also in the read grace. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
 | `GET` | `/v1/vaults/:vaultId/blobs/:blobId` | The same access as `HEAD`. Raw bytes, `Content-Length`, `Moony-Blob-Size`; `404 blob_not_found` (also for a record whose file is gone). |
 | `GET` | `/v1/vaults/:vaultId/blobs` | The same access as `HEAD`. Query `after` (a blob ID, exclusive; `400 invalid_blob_id` when malformed) and `limit` (default 500, at most 1000; `400 invalid_limit` below 1). → `{"blobs": [{"id", "size", "createdAt"}], "more": bool, "now": <unix seconds>}` in ID order; `more` says another page follows. `now` is the server's clock, so a device can measure a blob's age (`now - createdAt`) on the same clock that stamped `createdAt`. |
 | `DELETE` | `/v1/vaults/:vaultId/blobs/:blobId` | Current token only (`403 token_read_only` for a previous one), and also for a person who is blocked: deleting is never refused for payment. → `204`, whether or not the blob existed. Frees its quota. Used by the devices' daily clean-up and by nothing else. |

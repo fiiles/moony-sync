@@ -135,7 +135,10 @@ interface Meta {
  *  write: needs entitlement and the current token;
  *  owner: the current token only (deleting your data or rotating the token never needs
  *  entitlement). */
-export type Access = "read" | "write" | "owner";
+/** What a call needs. `lookup` (vault info, key changes) is open to the current and to a previous
+ *  token; `read`, `write` and `owner` need the current token. `lookup` and `read` share the
+ *  read entitlement. */
+export type Access = "lookup" | "read" | "write" | "owner";
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 const asBuffer = (u: Uint8Array): Buffer => Buffer.from(u.buffer, u.byteOffset, u.byteLength);
@@ -247,7 +250,7 @@ export function createVaults(
     const now = clock();
     const role = roleOf(m, sha256(token), now);
     if (!role) return fail(401, "unauthorized");
-    if (role === "previous" && access !== "read") return fail(403, "token_read_only");
+    if (role === "previous" && access !== "lookup") return fail(403, "token_read_only");
     if (!entitled(m, access, now)) return fail(402, "payment_required");
     return { ok: true, meta: m };
   }
@@ -439,7 +442,7 @@ export function createVaults(
     },
 
     async info(vaultId, token) {
-      const auth = authorize(vaultId, token, "read");
+      const auth = authorize(vaultId, token, "lookup");
       if (!auth.ok) return auth;
       const m = auth.meta;
       return {
@@ -520,7 +523,7 @@ export function createVaults(
     },
 
     async rekeys(vaultId, token, after, limit) {
-      const auth = authorize(vaultId, token, "read");
+      const auth = authorize(vaultId, token, "lookup");
       if (!auth.ok) return auth;
       const rows = q.selectRekeys.all(vaultId, after, clock() - PREVIOUS_TOKEN_SECONDS, limit) as {
         rotation: number;

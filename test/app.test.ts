@@ -22,7 +22,7 @@ describe("app shell", () => {
     expect(await res.json()).toEqual({
       name: "moony-sync",
       version: "9.9.9",
-      protocol: 2,
+      protocol: 3,
       mode: "self_hosted",
       features: ["blobs", "kit"],
     });
