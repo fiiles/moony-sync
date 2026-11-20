@@ -456,7 +456,7 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Op ciphertext | 192 KiB |
 | Ops per push | 500 |
 | Push body | 4 MiB |
-| Pull page | default 500 ops, max 1000, cut at ~4 MiB |
+| Pull page | default 500 ops, max 1000, cut at ~4 MiB; the server reads the sizes first and the ciphertext of the returned ops only, so a request never loads more than the page it sends (same for the key-change page) |
 | Op bytes stored per vault | 256 MiB, each op charged ciphertext + 128 bytes |
 | Snapshot | 100 MiB, 2 kept per vault |
 | Blob | 104,883,275 bytes (100 MiB of content sealed by the app) |

@@ -1,7 +1,7 @@
 // Token rotation.
 
 import { describe, expect, it } from "vitest";
-import { DAY } from "../src/limits.js";
+import { DAY, MAX_REKEY_PAGE_BYTES } from "../src/limits.js";
 import {
   auth,
   b64,
@@ -345,5 +345,27 @@ describe("token rotation", () => {
         (t.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n,
       ).toBe(0);
     }
+  });
+});
+
+describe("a rekey page reads only what it sends", () => {
+  it("cuts the page by sizes before it reads any bundle", async () => {
+    const t = testApp();
+    let v = await newVault(t);
+    const size = 200 * 1024;
+    for (let i = 0; i < 32; i++) {
+      const next = newToken();
+      const res = await rotate(t, v, next, b64("y".repeat(size - 8) + String(i).padStart(8, "0")));
+      expect(res.status).toBe(200);
+      v = { ...v, token: next };
+    }
+    const fit = Math.floor(MAX_REKEY_PAGE_BYTES / size);
+    t.stores.vaults.stats.rekeyBytesRead = 0;
+    const res = await t.call("GET", `/v1/vaults/${v.id}/rekey?limit=32`, { headers: auth(v) });
+    const body = (await res.json()) as Rekeys & { more: boolean };
+    expect(body.rekeys.map((r) => r.rotation)).toEqual(Array.from({ length: fit }, (_, i) => i + 1));
+    expect(body.more).toBe(true);
+    expect(t.stores.vaults.stats.rekeyBytesRead).toBe(fit * size);
+    expect(t.stores.vaults.stats.rekeyBytesRead).toBeLessThanOrEqual(MAX_REKEY_PAGE_BYTES + size);
   });
 });

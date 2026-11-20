@@ -48,6 +48,8 @@ export type Rekey = { rotation: number; head: number; at: number; rekey: string 
 export type SnapshotRef = { file: string; seq: number; size: number };
 
 export interface Vaults {
+  /** Ciphertext bytes read from the database by pulls and key-change pages; for tests. */
+  readonly stats: { opBytesRead: number; rekeyBytesRead: number };
   init(vaultId: string, account: string, token: string): Promise<Result<{ created: boolean }>>;
   info(vaultId: string, token: string): Promise<Result<VaultInfo>>;
   destroy(vaultId: string, token: string): Promise<Result>;
@@ -152,6 +154,7 @@ export function createVaults(
   blobFiles: BlobFiles,
 ): Vaults {
   const kits = kitRows(db);
+  const stats = { opBytesRead: 0, rekeyBytesRead: 0 };
   const q = {
     meta: db.prepare("SELECT * FROM vaults WHERE vault_id = ?"),
     countByAccount: db.prepare("SELECT COUNT(*) AS n FROM vaults WHERE account = ?"),
@@ -172,8 +175,10 @@ export function createVaults(
       "INSERT OR IGNORE INTO ops (vault_id, seq, op_id, ct, size, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     ),
     setHeadBytes: db.prepare("UPDATE vaults SET head = ?, bytes = ? WHERE vault_id = ?"),
+    // A page is read in two steps so the ciphertext of rows past the byte cut is never read.
+    opSizes: db.prepare("SELECT seq, size FROM ops WHERE vault_id = ? AND seq > ? ORDER BY seq LIMIT ?"),
     selectOps: db.prepare(
-      "SELECT seq, op_id, ct, size FROM ops WHERE vault_id = ? AND seq > ? ORDER BY seq LIMIT ?",
+      "SELECT seq, op_id, ct FROM ops WHERE vault_id = ? AND seq > ? AND seq <= ? ORDER BY seq",
     ),
     insertSnapshot: db.prepare(
       "INSERT INTO snapshots (vault_id, file, seq, size, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -198,8 +203,11 @@ export function createVaults(
     insertRekey: db.prepare(
       "INSERT INTO rekeys (vault_id, rotation, head, at, rekey) VALUES (?, ?, ?, ?, ?)",
     ),
+    rekeySizes: db.prepare(
+      "SELECT rotation, length(rekey) AS size FROM rekeys WHERE vault_id = ? AND rotation > ? AND at > ? ORDER BY rotation LIMIT ?",
+    ),
     selectRekeys: db.prepare(
-      "SELECT rotation, head, at, rekey FROM rekeys WHERE vault_id = ? AND rotation > ? AND at > ? ORDER BY rotation LIMIT ?",
+      "SELECT rotation, head, at, rekey FROM rekeys WHERE vault_id = ? AND rotation > ? AND at > ? AND rotation <= ? ORDER BY rotation",
     ),
     moreRekeys: db.prepare("SELECT 1 FROM rekeys WHERE vault_id = ? AND rotation > ? AND at > ? LIMIT 1"),
     pruneMax: db.prepare(
@@ -443,6 +451,7 @@ export function createVaults(
   }
 
   return {
+    stats,
     async init(vaultId, account, token) {
       return doInit(vaultId, account, token);
     },
@@ -482,18 +491,25 @@ export function createVaults(
       if (!auth.ok) return auth;
       const m = auth.meta;
       if (after < m.floor) return fail(410, "snapshot_required");
-      const rows = q.selectOps.all(vaultId, after, limit) as {
-        seq: number;
-        op_id: string;
-        ct: Buffer;
-        size: number;
-      }[];
-      const ops: StoredOp[] = [];
+      const sizes = q.opSizes.all(vaultId, after, limit) as { seq: number; size: number }[];
       let bytes = 0;
-      for (const r of rows) {
-        if (ops.length > 0 && bytes + r.size > MAX_PULL_BYTES) break;
-        ops.push({ seq: r.seq, id: r.op_id, ct: toBytes(r.ct) });
+      let count = 0;
+      for (const r of sizes) {
+        if (count > 0 && bytes + r.size > MAX_PULL_BYTES) break;
         bytes += r.size;
+        count++;
+      }
+      const ops: StoredOp[] = [];
+      if (count > 0) {
+        const rows = q.selectOps.all(vaultId, after, sizes[count - 1]!.seq) as {
+          seq: number;
+          op_id: string;
+          ct: Buffer;
+        }[];
+        for (const r of rows) {
+          stats.opBytesRead += r.ct.byteLength;
+          ops.push({ seq: r.seq, id: r.op_id, ct: toBytes(r.ct) });
+        }
       }
       const last = ops.length > 0 ? ops[ops.length - 1]!.seq : Math.max(after, m.floor);
       return { ok: true, ops, head: m.head, more: last < m.head };
@@ -531,18 +547,27 @@ export function createVaults(
     async rekeys(vaultId, token, after, limit) {
       const auth = authorize(vaultId, token, "lookup");
       if (!auth.ok) return auth;
-      const rows = q.selectRekeys.all(vaultId, after, clock() - PREVIOUS_TOKEN_SECONDS, limit) as {
-        rotation: number;
-        head: number;
-        at: number;
-        rekey: Buffer;
-      }[];
-      const out: Rekey[] = [];
+      const horizon = clock() - PREVIOUS_TOKEN_SECONDS;
+      const sizes = q.rekeySizes.all(vaultId, after, horizon, limit) as { rotation: number; size: number }[];
       let bytes = 0;
-      for (const r of rows) {
-        if (out.length > 0 && bytes + r.rekey.byteLength > MAX_REKEY_PAGE_BYTES) break;
-        bytes += r.rekey.byteLength;
-        out.push({ rotation: r.rotation, head: r.head, at: r.at, rekey: encodeBase64(toBytes(r.rekey)) });
+      let count = 0;
+      for (const r of sizes) {
+        if (count > 0 && bytes + r.size > MAX_REKEY_PAGE_BYTES) break;
+        bytes += r.size;
+        count++;
+      }
+      const out: Rekey[] = [];
+      if (count > 0) {
+        const rows = q.selectRekeys.all(vaultId, after, horizon, sizes[count - 1]!.rotation) as {
+          rotation: number;
+          head: number;
+          at: number;
+          rekey: Buffer;
+        }[];
+        for (const r of rows) {
+          stats.rekeyBytesRead += r.rekey.byteLength;
+          out.push({ rotation: r.rotation, head: r.head, at: r.at, rekey: encodeBase64(toBytes(r.rekey)) });
+        }
       }
       const last = out.length > 0 ? out[out.length - 1]!.rotation : after;
       const more = q.moreRekeys.get(vaultId, last, clock() - PREVIOUS_TOKEN_SECONDS) !== undefined;

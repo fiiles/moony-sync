@@ -1,7 +1,7 @@
 // Vault creation, ops, entitlement and snapshots.
 
 import { describe, expect, it } from "vitest";
-import { DAY, MAX_OP_BYTES, MAX_OPS_PER_PUSH, MAX_VAULT_OP_BYTES, OP_OVERHEAD_BYTES } from "../src/limits.js";
+import { DAY, MAX_OP_BYTES, MAX_PULL_BYTES, MAX_OPS_PER_PUSH, MAX_VAULT_OP_BYTES, OP_OVERHEAD_BYTES } from "../src/limits.js";
 import {
   addPerson,
   auth,
@@ -343,5 +343,29 @@ describe("snapshots", () => {
     expect(huge.status).toBe(413);
     expect(await huge.json()).toEqual({ error: "snapshot_too_large" });
     expect(snapshotFiles(t, v)).toEqual([]);
+  });
+});
+
+describe("a pull reads only what it sends", () => {
+  it("cuts the page by sizes before it reads any ciphertext", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const ct = 150 * 1024;
+    const body = (i: number) => ({ id: `big-${i}`, ct: b64("x".repeat(ct - 8) + String(i).padStart(8, "0")) });
+    for (let batch = 0; batch < 6; batch++) {
+      const res = await push(t, v, Array.from({ length: 10 }, (_, i) => body(batch * 10 + i)));
+      expect(res.status).toBe(200);
+    }
+    const perOp = ct + OP_OVERHEAD_BYTES;
+    const fit = Math.floor(MAX_PULL_BYTES / perOp);
+    t.stores.vaults.stats.opBytesRead = 0;
+    const res = await pull(t, v, 0, 1000);
+    const page = (await res.json()) as PullBody;
+    expect(page.ops.map((o) => o.seq)).toEqual(Array.from({ length: fit }, (_, i) => i + 1));
+    expect(page.ops.map((o) => o.id)).toEqual(Array.from({ length: fit }, (_, i) => `big-${i}`));
+    expect(page.head).toBe(60);
+    expect(page.more).toBe(true);
+    expect(t.stores.vaults.stats.opBytesRead).toBe(fit * ct);
+    expect(t.stores.vaults.stats.opBytesRead).toBeLessThanOrEqual(MAX_PULL_BYTES + ct);
   });
 });
