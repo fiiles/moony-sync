@@ -86,6 +86,9 @@ export const en = {
   "http.title": "This connection is not encrypted (http)",
   "http.text": "The password and the session cross the network in clear text. Anyone on the same network can read them. Outside your home network, put the server behind https.",
 
+  "proxy.forwarded_untrusted": "This server seems to be behind a proxy, but TRUST_PROXY is off. All devices share one rate limit, and anyone can use it up. Set TRUST_PROXY=1 if exactly one reverse proxy stands in front.",
+  "proxy.direct_client": "TRUST_PROXY is on, but a request reached the server without passing the proxy. Publish the port to the proxy only (for example 127.0.0.1:8787:8787), otherwise clients can choose their own rate-limit key.",
+
   "overview.eyebrow": "Your server",
   "overview.title": "Overview",
   "overview.lead": "The server stores only encrypted data. Neither the server nor this administration can read its content.",

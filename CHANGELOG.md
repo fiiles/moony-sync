@@ -19,6 +19,10 @@ All notable changes to the Moony sync server are documented in this file. The fo
   optional second factor; `reset-admin` for a lost password.
 - **Limits and housekeeping**: rate limits per client address, a free-space floor of 1 GiB,
   daily clean-up, and no outbound connections.
+- **Proxy mistakes are visible.** The admin overview warns when forwarding headers arrive while
+  `TRUST_PROXY` is off, or when a request reaches the port without them while it is on; the
+  server logs each once, without any address. `compose.yml` and the README show the loopback
+  binding for a reverse proxy on the same machine, and the image's health check now uses `/health`.
 - **A pull reads only what it sends.** The server picks the page by stored sizes and reads the ciphertext of those ops only (the same for key changes), so one request no longer loads up to 190 MiB into memory.
 - **Vault IDs are unique ignoring letter case**, so two profiles can never share a folder on a
   file system that ignores case. A database that already holds two such IDs stops the server at

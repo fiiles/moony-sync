@@ -40,6 +40,13 @@ export function Overview() {
         </div>
       ) : null}
 
+      {o.proxyWarning ? (
+        <div class="alert note">
+          <Icon name="alert" />
+          <div>{t(`proxy.${o.proxyWarning}`)}</div>
+        </div>
+      ) : null}
+
       <div class="stats">
         <div class="stat">
           <span class="stat__label">{t("overview.people")}</span>

@@ -32,7 +32,7 @@ docker compose logs moony-sync         # shows the one-time setup code
 
 `compose.yml` builds the image as `moony-sync:local`, publishes port 8787 and keeps all state in
 `./data`. The container restarts by itself (`restart: unless-stopped`) and has a health check on
-`GET /v1/server`.
+`GET /health`.
 
 The `chown` matters with a bind mount: Docker creates a missing `./data` as root, and the server
 could not write to it. If you prefer a named volume, replace `./data:/data` with a volume name.
@@ -52,6 +52,9 @@ DATA_DIR=./data PORT=8787 node dist/main.js
    `Setup code:`), a name for the admin and a password of at least 10 characters. While there is
    no admin the server prints a new random code at every start, so always read the latest line.
    A code written by `reset-admin` is the exception: it stays valid across restarts until used.
+2. If a reverse proxy stands in front (see [https](#https-behind-a-reverse-proxy)), publish the
+   port to the proxy only (`127.0.0.1:8787:8787` in `compose.yml`) and set `TRUST_PROXY=1`. The
+   overview shows a warning when the server sees either half of this done wrong.
 3. The overview asks you to confirm the **address apps use** before you can add anyone. It is
    pre-filled with the address your browser is using right now, which is only right if the apps
    will reach the server the same way (see [https](#https-behind-a-reverse-proxy)). Confirm it or
@@ -111,7 +114,10 @@ What `TRUST_PROXY=1` does:
 - Behind an https proxy it makes the admin's session cookie `Secure`. Without it the server thinks
   the connection is plain http and does not set that flag.
 - Do not set it when clients reach the server directly: anyone could then choose their own
-  address by sending the header.
+  address by sending the header. Publish the port to the proxy only for the same reason.
+- The overview warns about both mistakes, from request headers alone (nothing is stored or
+  logged about the client): forwarding headers arriving while `TRUST_PROXY` is off, and a request
+  without them while it is on. The server also logs each warning once.
 
 ### Caddy
 
@@ -121,6 +127,14 @@ Caddy gets and renews the certificate on its own. With Caddy on the same machine
 sync.example.com {
 	reverse_proxy 127.0.0.1:8787
 }
+```
+
+In `compose.yml`, publish the port on the loopback address only, so nothing but Caddy can reach it
+(use the commented line there instead of `"8787:8787"`):
+
+```yaml
+    ports:
+      - "127.0.0.1:8787:8787"
 ```
 
 If Caddy runs in the same compose project, use `reverse_proxy moony-sync:8787`. Caddy has no upload

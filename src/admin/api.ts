@@ -9,6 +9,7 @@ import { normalizeName, type Person } from "../people.js";
 import { clientKey, lastForwarded } from "../ratelimit.js";
 import { blobQuotaBytes, setBlobQuotaBytes } from "../blobs.js";
 import { MAX_BLOB_QUOTA_BYTES } from "../limits.js";
+import type { ProxyWatch } from "../proxy-watch.js";
 import { backupFileName, createBackupStream, estimateBackupBytes } from "./backup.js";
 import { getSetting, setSetting, type Auth, type SessionInfo } from "./auth.js";
 
@@ -33,7 +34,7 @@ function cookieValue(header: string | null): string | null {
   return null;
 }
 
-export function adminRoutes(deps: AppDeps, stores: Stores, auth: Auth, budget: BodyBudget): Hono<Env> {
+export function adminRoutes(deps: AppDeps, stores: Stores, auth: Auth, budget: BodyBudget, proxyWatch: ProxyWatch): Hono<Env> {
   const { config, db, clock } = deps;
   const router = new Hono<Env>();
 
@@ -220,6 +221,7 @@ export function adminRoutes(deps: AppDeps, stores: Stores, auth: Auth, budget: B
       bytesFree,
       lastActivity: vaults.reduce<number | null>((m, v) => newest(m, v.lastActivity), null),
       version: config.version,
+      proxyWarning: proxyWatch.warning(),
       insecure: !isHttps(c) && hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "[::1]",
     });
   });

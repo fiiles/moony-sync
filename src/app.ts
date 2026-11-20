@@ -10,6 +10,7 @@ import { createBodyBudget, errorResponse, json, type BodyBudget } from "./http.j
 import { diskFreeBytes, type FreeBytes } from "./disk.js";
 import { MAX_INFLIGHT_BODY_BYTES } from "./limits.js";
 import { createMailboxes, type Mailboxes } from "./mailboxes.js";
+import { createProxyWatch } from "./proxy-watch.js";
 import { createPeople, type People } from "./people.js";
 import { clientKey, createLimiters } from "./ratelimit.js";
 import { createBlobFiles, type BlobFiles } from "./blob-files.js";
@@ -80,6 +81,11 @@ export function createApp(given: Deps): {
   };
   const app = new Hono<{ Bindings: AppBindings }>();
 
+  const proxyWatch = createProxyWatch(deps.config.trustProxy, deps.log);
+  app.use("*", async (c, next) => {
+    proxyWatch.see(c.req.raw);
+    await next();
+  });
   app.get("/health", () => json({ ok: true }));
   const limiters = createLimiters(deps.clock);
   const budget = createBodyBudget(MAX_INFLIGHT_BODY_BYTES);
@@ -101,7 +107,7 @@ export function createApp(given: Deps): {
   // While there is no admin, the setup code is in the log at every start (`docker logs`). It is
   // the one secret allowed there; the server never logs anything else secret.
   if (auth.setupNeeded()) deps.log(`Setup code: ${auth.setupCode()}`);
-  app.route("/admin/api", adminRoutes(deps, stores, auth, budget));
+  app.route("/admin/api", adminRoutes(deps, stores, auth, budget, proxyWatch));
 
   // The admin interface: files, and index.html for its own paths. API paths never get the page.
   const serveUi = createStaticHandler(deps.uiDir ?? DEFAULT_UI_DIR);

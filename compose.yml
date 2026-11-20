@@ -3,6 +3,7 @@ services:
     image: moony-sync:local
     build: .
     ports:
+      # - "127.0.0.1:8787:8787"   # behind a reverse proxy on this machine (with TRUST_PROXY=1)
       - "8787:8787"
     volumes:
       - ./data:/data

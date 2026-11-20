@@ -83,6 +83,13 @@ database.
 | `REQUIRE_2FA` | `0` | `1` makes the admin's second factor mandatory |
 | `SETUP_CODE` | random | Fixed first-run setup code; ignored once an admin exists |
 
+With `TRUST_PROXY=1` the server logs one line at start (`TRUST_PROXY is on: only your reverse
+proxy may reach this port`) and watches two booleans, never an address, header value or path:
+`X-Forwarded-For` / `Forwarded` seen while it is off (`forwarded_untrusted`: every client shares
+the proxy's rate-limit key), or a request without either while it is on (`direct_client`: a client
+that reaches the port itself chooses its own key). Each is logged once and reported as `proxyWarning`
+in the admin overview. `/health` is not looked at; the image's health check uses it.
+
 `TRUST_PROXY` and `REQUIRE_2FA` accept `1`, `0`, `true`, `false` in any case; any other non-empty
 value stops the server at start with a one-line message, because guessing what "yes" means could
 silently leave a security setting off.
@@ -208,7 +215,7 @@ numbers never appear in answers, except inside a connection code.
 | `POST` | `/admin/api/2fa/enrol` | `{password}` → `{secret, otpauthUrl}` |
 | `POST` | `/admin/api/2fa/confirm` | `{totp}` → `{backupCodes}` (shown once) |
 | `POST` | `/admin/api/2fa/disable` | `{password}` → `204`; `403 required` when `REQUIRE_2FA=1` |
-| `GET` | `/admin/api/overview` | `{address, addressSuggestion, people, profiles, bytesUsed, bytesFree, lastActivity, version, insecure}` |
+| `GET` | `/admin/api/overview` | `{address, addressSuggestion, people, profiles, bytesUsed, bytesFree, lastActivity, version, insecure, proxyWarning}`; `proxyWarning` is `"forwarded_untrusted"`, `"direct_client"` or `null` |
 | `GET` | `/admin/api/people` | `[{id, name, state, profiles, bytes, lastActivity, createdAt}]` |
 | `POST` | `/admin/api/people` | `{name}` → `201 {person, connectionCode}`. `400 invalid_name`; `409 address_not_set` until an address is saved or `PUBLIC_URL` is set |
 | `GET` | `/admin/api/people/:id` | The person plus `vaults: [{id, shortId, bytes, files, lastActivity, kitSince, kitLastRead}]`; `bytes` counts ops, snapshots and blobs, `files` is the number of blob records; `kitSince` is when the profile's Recovery Kit was created (its token set) and `kitLastRead` the minute of its last use, each `null` when there is none. Never the Kit's token or envelope. |

@@ -49,6 +49,7 @@ export function overviewBody(over: Record<string, unknown> = {}) {
     lastActivity: Math.floor(Date.now() / 1000) - 240,
     version: "1.0.0",
     insecure: false,
+    proxyWarning: null,
     ...over,
   };
 }
