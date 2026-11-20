@@ -1,10 +1,12 @@
 # Moony sync server
 
-A small server you run yourself, so your Moony devices can keep their data in sync without any
-cloud service in between. It stores and forwards **encrypted** change records, encrypted
-snapshots, and the apps' encrypted documents and photos. It cannot read them: the keys never leave your devices.
+A small server you run yourself, so your [Moony](https://github.com/fiiles/Moony) devices can
+keep their data in sync without any cloud service in between. It stores and forwards
+**encrypted** change records, encrypted snapshots, and the apps' encrypted documents and photos.
+It cannot read them: the keys never leave your devices.
 
-- One Node process, one folder of data (a SQLite database, snapshot files and the files of documents and photos).
+- One Node process, one folder of data (a SQLite database, snapshot files and the files of
+  documents and photos).
 - A web page to add the people who may use it, block them, delete them and download a backup.
 - No outbound connections. No e-mail, no analytics, no telemetry.
 - Written for a home server or a NAS: a Docker container, `compose.yml`, and a few lines of reverse
@@ -21,7 +23,7 @@ You need Docker with the compose plugin. This repository does not publish an ima
 once from the source:
 
 ```bash
-git clone <this repository> moony-sync
+git clone https://github.com/fiiles/Moony-relay.git moony-sync
 cd moony-sync
 mkdir data && chown 1000:1000 data     # the container runs as user "node" (uid 1000)
 docker compose up -d --build
@@ -232,9 +234,10 @@ All optional. Everything else is set on the admin page and stored in the databas
 In `DATA_DIR`: `moony-sync.db` (SQLite, WAL mode, with `-wal` and `-shm` files next to it), a
 `snapshots/` folder and a `blobs/` folder. Snapshots, documents and photos are encrypted by the
 apps; the server keeps the newest two snapshots per profile. Housekeeping runs once a day inside
-the server (it also cleans up abandoned document uploads), and every time rule is also checked on each request, so a stopped server misses
-nothing. Uploads stop with "server full" (`507`) when less than 1 GiB would remain free on the
-data volume (uploads still running count as used), and ordinary sync goes on. Details in [`DESIGN.md`](DESIGN.md).
+the server (it also cleans up abandoned document uploads), and every time rule is also checked on
+each request, so a stopped server misses nothing. Uploads stop with "server full" (`507`) when
+less than 1 GiB would remain free on the data volume (uploads still running count as used), and
+ordinary sync goes on. Details in [`DESIGN.md`](DESIGN.md).
 
 The log (stdout) contains the start-up line, the setup code while there is no admin,
 `housekeeping: <step> failed`, `unhandled error: <error name>` (the name only) and
@@ -245,11 +248,12 @@ numbers, tokens, profile or mailbox IDs, file paths or client addresses.
 
 Pairing mailboxes hold their contents for at most about 11 minutes (10-minute expiry plus a sweep
 that runs every minute); after that only a content-free tombstone remains. Limits that answer
-`503 {"error":"busy"}`: all open pairing slots together hold at most 64 MiB (one client address, or IPv6 /64, at most
-8 MiB of that), and request bodies being buffered at one moment (sync and admin API together;
-snapshot uploads stream to disk and do not count) share 64 MiB (one client address, or IPv6 /64, at most 8 MiB of it), reserved as the bytes arrive. A
-body that delivers nothing for 30 seconds is aborted with `408 {"error":"body_timeout"}`. With `TRUST_PROXY=1` the **last** `X-Forwarded-For` entry is the client
-address.
+`503 {"error":"busy"}`: all open pairing slots together hold at most 64 MiB (one client address,
+or IPv6 /64, at most 8 MiB of that), and request bodies being buffered at one moment (sync and
+admin API together; snapshot uploads stream to disk and do not count) share 64 MiB (one client
+address, or IPv6 /64, at most 8 MiB of it), reserved as the bytes arrive. A body that delivers
+nothing for 30 seconds is aborted with `408 {"error":"body_timeout"}`. With `TRUST_PROXY=1` the
+**last** `X-Forwarded-For` entry is the client address.
 
 ## Known limits
 
@@ -260,10 +264,11 @@ address.
   a vault token.
 - **Quota and parallel uploads.** A person's op quota is 256 MiB, counted as the ciphertext plus
   128 bytes per change (so many tiny changes cannot use up the disk unnoticed); real disk use is
-  still higher because of row and index overhead beyond the 128 bytes charged: for very small changes the real disk cost can be up to about twice the quota. Snapshot uploads
-  (100 MiB each, 2 kept per profile) are not limited in parallel, but a profile may upload at
-  most two documents or photos at once (the nginx `client_max_body_size 128m` advice already
-  covers a 100 MiB document).
+  still higher because of row and index overhead beyond the 128 bytes charged: for very small
+  changes the real disk cost can be up to about twice the quota. Snapshot uploads (100 MiB each,
+  2 kept per profile) are not limited in parallel, but a profile may upload at most two documents
+  or photos at once (the nginx `client_max_body_size 128m` advice already covers a 100 MiB
+  document).
 
 ## Development
 
@@ -277,10 +282,34 @@ npm run dev:ui      # Vite dev server for the admin interface
 ```
 
 ```
-src/              the server: sync API (sync-api.ts), vaults, mailboxes, people, admin/ (auth, API, backup)
+src/              the server: sync API (sync-api.ts), vaults, mailboxes, people, admin/
 admin-ui/         the admin web interface (Preact, built with Vite, served by the server)
 test/             server tests, each on a temporary data directory and a clock the test moves
 Dockerfile        multi-stage build on node:24-bookworm-slim
 compose.yml       the service as described above
 DESIGN.md         protocol, storage, admin, what the server knows
 ```
+
+How to contribute, and the checks a change must pass: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Built with AI assistance
+
+Like Moony, this server is developed by one maintainer working with AI coding agents. They
+follow written rules ([AGENTS.md](AGENTS.md)), and every change must pass the type check and the
+tests, which CI runs again. That reduces mistakes but does not remove them; please report what
+you find.
+
+## Help and security
+
+- **Bugs and questions:** [open an issue](https://github.com/fiiles/Moony-relay/issues). Never
+  paste a connection code, an account number, a token, a setup code or a backup archive.
+- **Security problems:** follow [SECURITY.md](SECURITY.md); do not file a public issue.
+
+## License
+
+Copyright © 2026 Filip Král
+
+The Moony sync server is free software: you can redistribute it and/or modify it under the terms
+of the **GNU Affero General Public License v3.0** as published by the Free Software Foundation.
+If you run a modified version for other people, the license asks you to offer them its source.
+The full text is in [LICENSE](LICENSE). The software comes with no warranty.

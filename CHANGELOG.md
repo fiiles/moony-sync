@@ -1,0 +1,20 @@
+# Changelog
+
+All notable changes to the Moony sync server are documented in this file. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+
+- **The first public version of the server.** One Node process with a SQLite database and a data
+  folder, run from a Docker image you build yourself.
+- **Sync API, protocol 2.** Encrypted change records and snapshots per profile, token rotation
+  with rekey bundles, pairing mailboxes for adding a device, encrypted documents and photos with
+  a quota per profile, and the Recovery Kit.
+- **Web admin** in Czech and English: add, block and delete people, show a person's connection
+  code, see the space used, change settings and download a backup. Login with a password and an
+  optional second factor; `reset-admin` for a lost password.
+- **Limits and housekeeping**: rate limits per client address, a free-space floor of 1 GiB,
+  daily clean-up, and no outbound connections.
