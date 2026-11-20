@@ -12,3 +12,6 @@ compose.yml
 coverage
 test
 admin-ui/test
+.github
+LICENSE
+.editorconfig

@@ -1,6 +1,47 @@
+# Dependencies
 node_modules/
+
+# Build outputs
 dist/
-coverage/
 admin-ui/dist/
+coverage/
+*.tsbuildinfo
+
+# The server's data folder (database, snapshots, documents and photos)
 data/
-.superpowers/tmp-run/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Environment files (may contain a setup code or an address)
+.env
+.env.*
+!.env.example
+
+# Backups downloaded from the admin page
+moony-sync-backup-*.tar
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Local AI-assistant state (never part of the project)
+.agent/
+.codex/
+.superpowers/
+.playwright-mcp/
+.claude/settings.local.json
+.claude/worktrees/
+.worktrees/
+.mcp.json
