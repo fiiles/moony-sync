@@ -15,7 +15,7 @@ There are no numbered releases yet: you build the server from this repository. O
 **Please do not open a public issue or pull request for a security problem.**
 
 Use **GitHub private vulnerability reporting**: on the repository open *Security → Report a
-vulnerability* (<https://github.com/fiiles/Moony-relay/security/advisories/new>). Only the
+vulnerability* (<https://github.com/fiiles/moony-sync/security/advisories/new>). Only the
 maintainer can read what you submit there. If you cannot use that form, open an ordinary issue
 that says just "security report, please contact me" without any detail, and the maintainer will
 arrange a private channel.

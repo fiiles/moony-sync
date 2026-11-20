@@ -12,8 +12,8 @@ It cannot read them: the keys never leave your devices.
 - Written for a home server or a NAS: a Docker container, `compose.yml`, and a few lines of reverse
   proxy configuration for https.
 
-The repository is called *Moony-relay* and the code says "relay" in places. That is the internal
-name from the time this was a hosted service. Everywhere you will look, it is the **sync server**.
+The code says "relay" in places. That is the internal name from the time this was a hosted
+service. Everywhere you will look, it is the **sync server**.
 
 How the protocol works, what the server stores and what it can see: [`DESIGN.md`](DESIGN.md).
 
@@ -23,7 +23,7 @@ You need Docker with the compose plugin. This repository does not publish an ima
 once from the source:
 
 ```bash
-git clone https://github.com/fiiles/Moony-relay.git moony-sync
+git clone https://github.com/fiiles/moony-sync.git
 cd moony-sync
 mkdir data && chown 1000:1000 data     # the container runs as user "node" (uid 1000)
 docker compose up -d --build
@@ -301,7 +301,7 @@ you find.
 
 ## Help and security
 
-- **Bugs and questions:** [open an issue](https://github.com/fiiles/Moony-relay/issues). Never
+- **Bugs and questions:** [open an issue](https://github.com/fiiles/moony-sync/issues). Never
   paste a connection code, an account number, a token, a setup code or a backup archive.
 - **Security problems:** follow [SECURITY.md](SECURITY.md); do not file a public issue.
 
