@@ -106,7 +106,7 @@ describe("token rotation", () => {
     expect(((await (await rekeys(t, { ...v, token: t2 }, 2)).json()) as Rekeys).rekeys).toEqual([]);
   });
 
-  it("works without a subscription, so a lost device can still be locked out", async () => {
+  it("works for a blocked person, so a lost device can still be locked out", async () => {
     const t = testApp();
     const v = await newVault(t);
     t.stores.people.setState(t.stores.people.byAccount(v.account)!.id, "blocked");

@@ -6,8 +6,7 @@ Every Moony device keeps its own encrypted database; devices exchange encrypted 
 
 You run it yourself (see `README.md`). It is one Node process with one data folder, a web admin
 for the person who runs it, and the sync API the Moony apps talk to. User-facing wording is "sync
-server"; "relay" is the internal name from when it was a hosted service and survives in some
-code.
+server"; "relay" is an internal name that survives in some code.
 
 `GET /v1/server` answers `protocol: 2`: the sync API of v1.1 below, plus the server-address
 discovery and the changes in "Changes to the v1.1 API". An app that needs that protocol refuses an
@@ -256,7 +255,7 @@ report that the sync server went back.
 
 ## Changes to the v1.1 API
 
-The sync API is the v1.1 API (below) with these differences from the hosted relay it came from:
+The sync API is the v1.1 API (below) with these differences:
 
 | Change | Detail |
 |---|---|

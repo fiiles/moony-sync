@@ -23,12 +23,12 @@ export const MAX_VAULTS_PER_ACCOUNT = 5;
 
 /** Ops already covered by a snapshot are pruned once they are this old. */
 export const OP_RETENTION_SECONDS = 30 * DAY;
-/** A lapsed vault stays readable this long after `paid_until`. */
+/** A blocked person's vault stays readable this long after the block. */
 export const READ_GRACE_SECONDS = 30 * DAY;
 /** A token that a rotation retired stays valid, read-only, this long; its rekey bundle is
  *  kept as long. */
 export const PREVIOUS_TOKEN_SECONDS = 30 * DAY;
-/** Self-hosted mode: `paid_until` of an account on the allow-list (year 9999, never expires). */
+/** `paidUntil` of an active person (year 9999, never expires). */
 export const SELF_HOSTED_PAID_UNTIL = 253402300799;
 /** How often the daily housekeeping runs. */
 export const HOUSEKEEPING_INTERVAL_SECONDS = DAY;

@@ -30,8 +30,7 @@ async function pullAll(t: TestApp, v: Vault, after = 0): Promise<PullBody> {
 }
 
 describe("vault creation", () => {
-  it("needs a paid account", async () => {
-    // Replaces "needs a paid account" (an account without subscription): a blocked person.
+  it("needs an active person", async () => {
     const t = testApp();
     const p = addPerson(t);
     t.stores.people.setState(p.id, "blocked");
@@ -222,7 +221,6 @@ describe("entitlement", () => {
   });
 
   it("answers a blocked person's vault, blocked for 31 days, with the lapsed read error, and unblocking restores it", async () => {
-    // Replaces "re-asks the account when its cached entitlement has lapsed".
     const t = testApp();
     const v = await newVault(t);
     const person = t.stores.people.byAccount(v.account)!;
@@ -236,7 +234,6 @@ describe("entitlement", () => {
   });
 
   it("does not let one account's block touch another account's vault", async () => {
-    // Replaces "ignores entitlement pokes from other accounts".
     const t = testApp();
     const v = await newVault(t);
     const stranger = addPerson(t, "Stranger");

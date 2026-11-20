@@ -82,7 +82,6 @@ describe("housekeeping", () => {
   });
 
   it("never deletes a vault for a lapse: blocked for 400 days, housekeep, the vault is still there", async () => {
-    // The hosted relay deleted a vault 90 days after a lapse; this server never does.
     const t = testApp();
     const v = await newVault(t);
     await push(t, v, ops("d", 1));
@@ -127,7 +126,7 @@ describe("housekeeping", () => {
 });
 
 describe("deletion", () => {
-  it("wipes ops and snapshots even without a live subscription", async () => {
+  it("wipes ops and snapshots even for a blocked person", async () => {
     const t = testApp();
     const v = await newVault(t);
     await push(t, v, ops("w", 2));
@@ -182,7 +181,6 @@ describe("deletion", () => {
   });
 
   it("finishes pending wipes and sweeps old directories of unknown vaults in sweep()", async () => {
-    // Replaces "resumes a wipe whose account unregister failed" (no separate account store now).
     const t = testApp();
     const v = await newVault(t);
     await uploadSnapshot(t, v, 0, "snap");

@@ -12,8 +12,8 @@ It cannot read them: the keys never leave your devices.
 - Written for a home server or a NAS: a Docker container, `compose.yml`, and a few lines of reverse
   proxy configuration for https.
 
-The code says "relay" in places. That is the internal name from the time this was a hosted
-service. Everywhere you will look, it is the **sync server**.
+The code says "relay" in places. That is an internal name; everywhere you will look, it is the
+**sync server**.
 
 How the protocol works, what the server stores and what it can see: [`DESIGN.md`](DESIGN.md).
 
