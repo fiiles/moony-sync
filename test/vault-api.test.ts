@@ -7,6 +7,7 @@ import {
   auth,
   b64,
   newToken,
+  newBlobId,
   newVault,
   newVaultId,
   pull,
@@ -14,6 +15,7 @@ import {
   snapshotFiles,
   testApp,
   unb64,
+  uploadBlob,
   uploadSnapshot,
   type PullBody,
   type TestApp,
@@ -63,6 +65,46 @@ describe("vault creation", () => {
       headers: { authorization: `Bearer ${newToken()}`, "moony-account": v.account },
     });
     expect(other.status).toBe(409);
+  });
+
+  it("refuses a vault ID that differs from an existing one only by letter case", async () => {
+    const t = testApp();
+    const account = addPerson(t).account;
+    const v: Vault = { account, id: "AbCdEfGhIjKlMnOpQrStUv", token: newToken() };
+    const created = await t.call("PUT", `/v1/vaults/${v.id}`, {
+      headers: { authorization: `Bearer ${v.token}`, "moony-account": account },
+    });
+    expect(created.status).toBe(201);
+    expect((await uploadSnapshot(t, v, 0, "snapshot-one")).status).toBe(201);
+    const blobId = newBlobId();
+    expect((await uploadBlob(t, v, blobId, "blob-one")).status).toBe(201);
+
+    for (const id of [v.id.toLowerCase(), v.id.toUpperCase()]) {
+      const res = await t.call("PUT", `/v1/vaults/${id}`, {
+        headers: { authorization: `Bearer ${newToken()}`, "moony-account": account },
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: "vault_exists" });
+    }
+    expect(t.db.prepare("SELECT COUNT(*) AS n FROM vaults").get()).toEqual({ n: 1 });
+
+    const snap = await t.call("GET", `/v1/vaults/${v.id}/snapshot`, { headers: auth(v) });
+    expect(snap.status).toBe(200);
+    expect(await snap.text()).toBe("snapshot-one");
+    const blob = await t.call("GET", `/v1/vaults/${v.id}/blobs/${blobId}`, { headers: auth(v) });
+    expect(blob.status).toBe(200);
+    expect(await blob.text()).toBe("blob-one");
+  });
+
+  it("treats a pending deletion ignoring case", async () => {
+    const t = testApp();
+    const account = addPerson(t).account;
+    t.db.prepare("INSERT INTO pending_wipes (vault_id) VALUES (?)").run("AbCdEfGhIjKlMnOpQrStUv");
+    const res = await t.call("PUT", `/v1/vaults/abcdefghijklmnopqrstuv`, {
+      headers: { authorization: `Bearer ${newToken()}`, "moony-account": account },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "vault_deleting" });
   });
 
   it("caps vaults per account", async () => {

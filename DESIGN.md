@@ -46,6 +46,11 @@ snapshots/<vault id>/<seq>-<uuid>     snapshot files, up to 100 MiB, the newest 
 blobs/<vault id>/<blob id>  attachment files (documents, photos, thumbnails), sealed by the apps, up to 104,883,275 bytes each
 ```
 
+Vault IDs are unique ignoring letter case (a unique index on `lower(vault_id)`), so two vaults can
+never share a folder under `snapshots/` or `blobs/` on a file system that ignores case (macOS,
+Windows). A server whose database already holds two IDs that differ only by case refuses to start
+and prints one line without the IDs.
+
 - The database holds the people, vaults (token hash, head, floor, rotation, last activity), ops,
   previous tokens, rekey bundles, snapshot records, blob records, Recovery Kits (the Kit token's
   hash, the envelope, when it was set, replaced and last read) and replaced Kit token hashes,
@@ -288,7 +293,7 @@ Headers: `Moony-Account: <account number>` for account calls and vault creation;
 
 | Method | Path | Notes |
 |---|---|---|
-| `PUT` | `/v1/vaults/:vaultId` | Create (idempotent for the same account + token). Needs `Moony-Account` + `Authorization`; the person must be entitled (`402 payment_required` when blocked), at most 5 vaults (`403 vault_limit_reached`). → `201` / `200`. `409 vault_exists` for another account or token, `409 vault_deleting` while a deletion is unfinished. |
+| `PUT` | `/v1/vaults/:vaultId` | Create (idempotent for the same account + token). Needs `Moony-Account` + `Authorization`; the person must be entitled (`402 payment_required` when blocked), at most 5 vaults (`403 vault_limit_reached`). → `201` / `200`. `409 vault_exists` for another account or token, or for an ID that differs from an existing vault's only by letter case; `409 vault_deleting` while a deletion is unfinished (an ID differing only by case counts as the same). |
 | `GET` | `/v1/vaults/:vaultId` | Current or previous token. → `{"head", "floor", "snapshotSeq", "paidUntil", "bytes", "rotation", "kit"}`. `rotation` is the latest rotation number (0 = never rotated); a device that sees it rise fetches the rekey bundles. `kit` is `{"since", "lastRead"}` (when the current Kit token was set; the minute of its last successful read, or `null`) or `null` when the vault has no Recovery Kit. |
 | `POST` | `/v1/vaults/:vaultId/ops` | Push. Body `{"ops": [{"id": "<op id>", "ct": "<base64>"}]}` → `{"head": n, "accepted": k}`. Duplicate op IDs are ignored (safe retries) while the op is still stored; after pruning the server no longer knows the ID, so clients must treat re-applying an op as harmless (per-column LWW already is). `413 quota_exceeded` past 256 MiB of op bytes, where each stored op is charged its ciphertext plus 128 bytes (the vault info `bytes` and the admin's space figures are this charge). |
 | `GET` | `/v1/vaults/:vaultId/ops?after=<seq>&limit=<n>` | Pull. Current token only (`403 token_read_only` for a previous one, judged before the floor). → `{"ops": [{"seq", "id", "ct"}], "head", "more"}`. `410 snapshot_required` when `after < floor`. |

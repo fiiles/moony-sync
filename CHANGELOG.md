@@ -19,3 +19,6 @@ All notable changes to the Moony sync server are documented in this file. The fo
   optional second factor; `reset-admin` for a lost password.
 - **Limits and housekeeping**: rate limits per client address, a free-space floor of 1 GiB,
   daily clean-up, and no outbound connections.
+- **Vault IDs are unique ignoring letter case**, so two profiles can never share a folder on a
+  file system that ignores case. A database that already holds two such IDs stops the server at
+  start-up with one line (no IDs in it).

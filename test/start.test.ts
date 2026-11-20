@@ -37,6 +37,33 @@ describe("startOrExit", () => {
     }
   });
 
+  it("refuses to start on a database that already holds two IDs equal ignoring case", () => {
+    const dir = mkdtempSync(join(tmpdir(), "moony-start-"));
+    try {
+      const db = openDb(dir);
+      db.exec("DROP INDEX vaults_id_fold; DELETE FROM schema_version WHERE version = 9");
+      const ins = db.prepare(
+        "INSERT INTO vaults (vault_id, account, token_hash, created_at, last_activity) VALUES (?, '1234567890123456', 'h', 0, 0)",
+      );
+      ins.run("AbCdEfGhIjKlMnOpQrStUv");
+      ins.run("abcdefghijklmnopqrstuv");
+      db.close();
+      expect(() => openDb(dir)).toThrow("vault_ids_collide_ignoring_case");
+      try {
+        openDb(dir);
+      } catch (e) {
+        expect(String(e instanceof Error ? e.message : e)).not.toMatch(/abcdefghijklmnopqrstuv/i);
+      }
+      const lines: string[] = [];
+      expect(() => startOrExit({ DATA_DIR: dir }, failing(lines))).toThrow(Exit);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("letter case");
+      expect(lines[0]).not.toMatch(/\n|\bat |abcdefghijklmnopqrstuv/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns the config and an open database otherwise", () => {
     const dir = mkdtempSync(join(tmpdir(), "moony-start-"));
     try {

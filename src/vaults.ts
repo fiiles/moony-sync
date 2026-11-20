@@ -161,6 +161,8 @@ export function createVaults(
     ),
     touch: db.prepare("UPDATE vaults SET last_activity = ? WHERE vault_id = ?"),
     pendingWipe: db.prepare("SELECT 1 FROM pending_wipes WHERE vault_id = ?"),
+    foldedVault: db.prepare("SELECT vault_id FROM vaults WHERE lower(vault_id) = lower(?)"),
+    foldedPendingWipe: db.prepare("SELECT 1 FROM pending_wipes WHERE lower(vault_id) = lower(?)"),
     pendingWipes: db.prepare("SELECT vault_id FROM pending_wipes"),
     addPendingWipe: db.prepare("INSERT OR IGNORE INTO pending_wipes (vault_id) VALUES (?)"),
     donePendingWipe: db.prepare("DELETE FROM pending_wipes WHERE vault_id = ?"),
@@ -305,7 +307,11 @@ export function createVaults(
   const doInit = atomic(
     (vaultId: string, account: string, token: string): Result<{ created: boolean }> => {
       // A deletion that failed half-way is still pending: re-creating now would be wiped by it.
-      if (q.pendingWipe.get(vaultId)) return fail(409, "vault_deleting");
+      // The same holds for an ID that differs only by letter case: on a case-insensitive disk it
+      // is the same folder.
+      if (q.foldedPendingWipe.get(vaultId)) return fail(409, "vault_deleting");
+      const folded = q.foldedVault.get(vaultId) as { vault_id: string } | undefined;
+      if (folded && folded.vault_id !== vaultId) return fail(409, "vault_exists");
       const tokenHash = sha256(token);
       const existing = meta(vaultId);
       if (existing) {
