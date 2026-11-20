@@ -87,6 +87,9 @@ export const cs: Record<Key, string> = {
   "http.title": "Spojení není šifrované (http)",
   "http.text": "Heslo i přihlášení putují sítí jako čitelný text. Kdokoli ve stejné síti je může přečíst. Mimo domácí síť dejte server za https.",
 
+  "proxy.forwarded_untrusted": "Server vypadá, že běží za proxy, ale TRUST_PROXY je vypnuté. Všechna zařízení sdílejí jeden limit požadavků a kdokoli ho může vyčerpat. Pokud před serverem stojí právě jedna reverzní proxy, nastavte TRUST_PROXY=1.",
+  "proxy.direct_client": "TRUST_PROXY je zapnuté, ale k serveru dorazil požadavek, který neprošel proxy. Port zveřejněte jen pro proxy (například 127.0.0.1:8787:8787), jinak si klienti mohou zvolit vlastní klíč limitu požadavků.",
+
   "overview.eyebrow": "Váš server",
   "overview.title": "Přehled",
   "overview.lead": "Server ukládá jen šifrovaná data. Jejich obsah nepřečte on ani tato správa.",

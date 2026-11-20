@@ -1,4 +1,4 @@
-# Moony sync server — design (protocol v1.1)
+# Moony sync server — design (protocol 3)
 
 The sync server keeps Moony devices in sync. It **stores and forwards ciphertext it cannot read**.
 Every Moony device keeps its own encrypted database; devices exchange encrypted change records
@@ -8,9 +8,9 @@ You run it yourself (see `README.md`). It is one Node process with one data fold
 for the person who runs it, and the sync API the Moony apps talk to. User-facing wording is "sync
 server"; "relay" is an internal name that survives in some code.
 
-`GET /v1/server` answers `protocol: 2`: the sync API of v1.1 below, plus the server-address
-discovery and the changes in "Changes to the v1.1 API". An app that needs that protocol refuses an
-older server.
+This document describes **protocol 3**, the first published protocol. `GET /v1/server` answers
+`protocol: 3`, and an app that needs it refuses an older server. How the protocol may change is
+under *Compatibility*.
 
 ## Principles
 
@@ -46,6 +46,11 @@ snapshots/<vault id>/<seq>-<uuid>     snapshot files, up to 100 MiB, the newest 
 blobs/<vault id>/<blob id>  attachment files (documents, photos, thumbnails), sealed by the apps, up to 104,883,275 bytes each
 ```
 
+Vault IDs are unique ignoring letter case (a unique index on `lower(vault_id)`), so two vaults can
+never share a folder under `snapshots/` or `blobs/` on a file system that ignores case (macOS,
+Windows). A server whose database already holds two IDs that differ only by case refuses to start
+and prints one line without the IDs.
+
 - The database holds the people, vaults (token hash, head, floor, rotation, last activity), ops,
   previous tokens, rekey bundles, snapshot records, blob records, Recovery Kits (the Kit token's
   hash, the envelope, when it was set, replaced and last read) and replaced Kit token hashes,
@@ -77,6 +82,15 @@ database.
 | `TRUST_PROXY` | `0` | `1` behind one reverse proxy: the client address, scheme and host come from the **last** entry of `X-Forwarded-For` / `-Proto` / `-Host` |
 | `REQUIRE_2FA` | `0` | `1` makes the admin's second factor mandatory |
 | `SETUP_CODE` | random | Fixed first-run setup code; ignored once an admin exists |
+
+The server watches two booleans, never an address, header value or path, whether `TRUST_PROXY` is
+on or off: `X-Forwarded-For` / `Forwarded` seen while it is off (`forwarded_untrusted`: every client
+shares the proxy's rate-limit key), or a request without either while it is on (`direct_client`: a
+client that reaches the port itself chooses its own key). With `TRUST_PROXY=1` a request carrying
+only `Forwarded` counts as proxied, although the rate-limit key itself is taken from
+`X-Forwarded-For` only. Each observation is logged once (with `TRUST_PROXY=1` the server also logs
+one line at start, `TRUST_PROXY is on: only your reverse proxy may reach this port`) and reported
+as `proxyWarning` in the admin overview. A warning stays until the server is restarted (the watch never clears it), so after fixing the port binding or `TRUST_PROXY` restart the server. "Forwarded headers seen" is a hint, not proof: any client can send the header while `TRUST_PROXY` is off. `/health` is not looked at; the image's health check uses it.
 
 `TRUST_PROXY` and `REQUIRE_2FA` accept `1`, `0`, `true`, `false` in any case; any other non-empty
 value stops the server at start with a one-line message, because guessing what "yes" means could
@@ -127,7 +141,8 @@ A **vault** is one encrypted Moony profile. The **vault token** proves the calle
 key. Revoking a device = the client creates a new vault key epoch and calls
 `POST /v1/vaults/:id/token` with the new token and a **rekey bundle** (opaque ciphertext the
 server stores for the other devices). The retired token stays valid, read-only, for 30 days so
-devices that have not noticed yet can still pull and fetch the bundle; then it is forgotten.
+devices that have not noticed yet can still read the vault's info and fetch the key changes (the
+bundle); everything else needs the current token. Then it is forgotten.
 
 ### Entitlement seam
 
@@ -141,7 +156,8 @@ would plug in.
 - **Writes** (push ops, snapshots, creating a vault) need `paidUntil > now` and the current token:
   `402 payment_required` otherwise.
 - **Reads** (pull ops, fetch snapshot, rekey bundles, vault info) are allowed until 30 days after
-  `paidUntil`, so a blocked person's device can still be restored.
+  `paidUntil`, so a blocked person's device can still be restored. Pull and snapshot (and the blob
+  reads) need the current token; a previous token reads only the vault info and the rekey bundles.
 - **Token rotation and vault deletion** need the current token only, no entitlement. A previous
   (read-only) token can do neither.
 - **Blocking never deletes.** There is no retention deletion by age: data goes when the admin
@@ -175,11 +191,17 @@ would plug in.
 - **Guessing.** Setup code, password and second-factor attempts are counted per client address (5
   per 15 minutes) and across all clients (50 per 15 minutes); beyond that `429 rate_limited`.
   Argon2 work is limited to 4 concurrent verifications. The counters live in memory: a lockout
-  lasts up to 15 minutes or until restart.
+  lasts up to 15 minutes or until restart, or until `moony-sync unlock-admin` (or `reset-admin`)
+  writes the setting `lockout_cleared_at`, which the server checks on every attempt and, when it
+  is newer than the value it last acted on, clears the per-client and overall counters. A
+  password re-check by a signed-in admin (change password, enrol or disable the second factor,
+  connection code) is counted against that client only, never against the overall count (so at
+  most 5 per 15 minutes per client address), and is not refused because the overall count is full.
 - **Lost password or second factor.** `moony-sync reset-admin` (in the container:
   `docker exec <container> moony-sync reset-admin`) deletes the admin, all sessions and backup
   codes, stores a fresh setup code and prints it. A running server uses the new code on its next
-  call. People, accounts and data are untouched. It does not clear the in-memory counters.
+  call. People, accounts and data are untouched. It also clears the attempt counters, like
+  `unlock-admin`.
 - One admin; no roles.
 - Over plain http the admin password and session cookie cross the network in clear text; the
   overview reports `insecure` when the page was loaded over http from a host other than
@@ -201,7 +223,7 @@ numbers never appear in answers, except inside a connection code.
 | `POST` | `/admin/api/2fa/enrol` | `{password}` → `{secret, otpauthUrl}` |
 | `POST` | `/admin/api/2fa/confirm` | `{totp}` → `{backupCodes}` (shown once) |
 | `POST` | `/admin/api/2fa/disable` | `{password}` → `204`; `403 required` when `REQUIRE_2FA=1` |
-| `GET` | `/admin/api/overview` | `{address, addressSuggestion, people, profiles, bytesUsed, bytesFree, lastActivity, version, insecure}` |
+| `GET` | `/admin/api/overview` | `{address, addressSuggestion, people, profiles, bytesUsed, bytesFree, lastActivity, version, insecure, proxyWarning}`; `proxyWarning` is `"forwarded_untrusted"`, `"direct_client"` or `null` |
 | `GET` | `/admin/api/people` | `[{id, name, state, profiles, bytes, lastActivity, createdAt}]` |
 | `POST` | `/admin/api/people` | `{name}` → `201 {person, connectionCode}`. `400 invalid_name`; `409 address_not_set` until an address is saved or `PUBLIC_URL` is set |
 | `GET` | `/admin/api/people/:id` | The person plus `vaults: [{id, shortId, bytes, files, lastActivity, kitSince, kitLastRead}]`; `bytes` counts ops, snapshots and blobs, `files` is the number of blob records; `kitSince` is when the profile's Recovery Kit was created (its token set) and `kitLastRead` the minute of its last use, each `null` when there is none. Never the Kit's token or envelope. |
@@ -253,19 +275,6 @@ numbers and the second-factor secret in clear: keep it private. Restore is manua
 server, replace the contents of `DATA_DIR`, start. Restoring an older archive makes every device
 report that the sync server went back.
 
-## Changes to the v1.1 API
-
-The sync API is the v1.1 API (below) with these differences:
-
-| Change | Detail |
-|---|---|
-| `GET /v1/server` | No auth. → `{"name": "moony-sync", "version": "<semver>", "protocol": 2, "mode": "self_hosted", "features": ["blobs", "kit"]}`. The app uses it to confirm an address is a Moony sync server. `features` lists optional capabilities (`blobs`: the blob endpoints; `kit`: the Recovery Kit endpoints and the `kit` of a rotation); the protocol stays 2, and a server without the field has no features. Rate-limited like account lookups. |
-| `POST /v1/accounts` | `403 registration_closed`. |
-| `POST /v1/accounts/me/checkout` | `409 self_hosted` (so older app builds keep working); `400 missing_account` without the header. |
-| `DELETE /v1/accounts/me` | `403 managed_by_operator`: the admin owns the person record. |
-| Webhooks | There are none; the paths answer `404 not_found`. |
-| Rate-limit key | The socket address, or the last `X-Forwarded-For` entry with `TRUST_PROXY=1`. |
-
 ## HTTP API
 
 All bodies are JSON unless noted. Errors are `{"error": "<code>"}` with a matching status.
@@ -276,28 +285,31 @@ Headers: `Moony-Account: <account number>` for account calls and vault creation;
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/v1/server` | See above. |
+| `GET` | `/v1/server` | No auth. → `{"name": "moony-sync", "version": "<semver>", "protocol": 3, "mode": "self_hosted", "features": ["blobs", "kit"]}`. The app uses it to confirm an address is a Moony sync server. `features` lists the optional capabilities: `blobs` (the blob endpoints) and `kit` (the Recovery Kit endpoints and the `kit` of a rotation). Both are part of protocol 3 and every protocol-3 server lists both; the list exists so that a later protocol can add features. Rate-limited like account lookups. |
 | `POST` | `/v1/accounts` | `403 registration_closed`. Rate-limited per client. |
 | `GET` | `/v1/accounts/me` | → `{"paidUntil": <unix s or null>, "active": bool, "vaults": n}`; `404 account_not_found`. `paidUntil` is the far-future constant for an active person, the time of the block for a blocked one. |
-| `POST` | `/v1/accounts/me/checkout` | `409 self_hosted` |
-| `DELETE` | `/v1/accounts/me` | `403 managed_by_operator` |
+| `POST` | `/v1/accounts/me/checkout` | `409 self_hosted`; `400 missing_account` without the header. |
+| `DELETE` | `/v1/accounts/me` | `403 managed_by_operator`: the admin owns the person record. |
+
+There are no webhooks; those paths answer `404 not_found`. The rate-limit key is the socket
+address, or the last `X-Forwarded-For` entry with `TRUST_PROXY=1`.
 
 ### Vaults
 
 | Method | Path | Notes |
 |---|---|---|
-| `PUT` | `/v1/vaults/:vaultId` | Create (idempotent for the same account + token). Needs `Moony-Account` + `Authorization`; the person must be entitled (`402 payment_required` when blocked), at most 5 vaults (`403 vault_limit_reached`). → `201` / `200`. `409 vault_exists` for another account or token, `409 vault_deleting` while a deletion is unfinished. |
-| `GET` | `/v1/vaults/:vaultId` | → `{"head", "floor", "snapshotSeq", "paidUntil", "bytes", "rotation", "kit"}`. `rotation` is the latest rotation number (0 = never rotated); a device that sees it rise fetches the rekey bundles. `kit` is `{"since", "lastRead"}` (when the current Kit token was set; the minute of its last successful read, or `null`) or `null` when the vault has no Recovery Kit. |
+| `PUT` | `/v1/vaults/:vaultId` | Create (idempotent for the same account + token). Needs `Moony-Account` + `Authorization`; the person must be entitled (`402 payment_required` when blocked), at most 5 vaults (`403 vault_limit_reached`). → `201` / `200`. `409 vault_exists` for another account or token, or for an ID that differs from an existing vault's only by letter case; `409 vault_deleting` while a deletion is unfinished (an ID differing only by case counts as the same). |
+| `GET` | `/v1/vaults/:vaultId` | Current or previous token. → `{"head", "floor", "snapshotSeq", "paidUntil", "bytes", "rotation", "kit"}`. `rotation` is the latest rotation number (0 = never rotated); a device that sees it rise fetches the rekey bundles. `kit` is `{"since", "lastRead"}` (when the current Kit token was set; the minute of its last successful read, or `null`) or `null` when the vault has no Recovery Kit. |
 | `POST` | `/v1/vaults/:vaultId/ops` | Push. Body `{"ops": [{"id": "<op id>", "ct": "<base64>"}]}` → `{"head": n, "accepted": k}`. Duplicate op IDs are ignored (safe retries) while the op is still stored; after pruning the server no longer knows the ID, so clients must treat re-applying an op as harmless (per-column LWW already is). `413 quota_exceeded` past 256 MiB of op bytes, where each stored op is charged its ciphertext plus 128 bytes (the vault info `bytes` and the admin's space figures are this charge). |
-| `GET` | `/v1/vaults/:vaultId/ops?after=<seq>&limit=<n>` | Pull. → `{"ops": [{"seq", "id", "ct"}], "head", "more"}`. `410 snapshot_required` when `after < floor`. |
+| `GET` | `/v1/vaults/:vaultId/ops?after=<seq>&limit=<n>` | Pull. Current token only (`403 token_read_only` for a previous one, judged before the floor); a blocked person's current token is served until 30 days after `paidUntil`. → `{"ops": [{"seq", "id", "ct"}], "head", "more"}`. `410 snapshot_required` when `after < floor`. |
 | `PUT` | `/v1/vaults/:vaultId/snapshot?seq=<S>` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 snapshot_too_large` over 100 MiB). `S` = the op seq the snapshot includes (`400 snapshot_ahead_of_head`, `409 snapshot_outdated`; `507 server_full` when the data volume would have less than 1 GiB free after it, counting the uploads still in progress). The body streams to disk; a body that ends early is `400 incomplete_body`. |
-| `GET` | `/v1/vaults/:vaultId/snapshot` | Raw bytes; `Moony-Snapshot-Seq` header. `404 no_snapshot` when none. |
+| `GET` | `/v1/vaults/:vaultId/snapshot` | Current token only (`403 token_read_only` for a previous one); a blocked person's current token is served until 30 days after `paidUntil`. Raw bytes; `Moony-Snapshot-Seq` header. `404 no_snapshot` when none. |
 | `POST` | `/v1/vaults/:vaultId/token` | Rotate. Body `{"token": "<new 43-char token>", "rekey": "<base64, ≤ 256 KiB decoded>", "kit"?: {"envelope": "<base64, ≤ 256 KiB decoded>", "token"?: "<43-char Kit token>"}}` (body at most 768 KiB). `kit` is required on a vault that has a Recovery Kit (`400 kit_required`) and is described under *Recovery Kit*. The **current** token authorises; no entitlement needed. One transaction: the current token's hash becomes a previous token (read-only for 30 days), the new hash becomes current, the bundle is stored with the next rotation number (1, 2, …), the vault head at that moment and the time. → `200 {"rotation": n, "head": h}`. A previous token gets `403 token_read_only` (so of two concurrent rotations the second fails); a wrong token `401 unauthorized`; a malformed or already-used new token `400 invalid_token`; a missing or malformed bundle `400 invalid_rekey`; a bundle over 256 KiB `413 rekey_too_large`; a vault already holding 32 bundles `409 too_many_rotations` (housekeeping frees slots). |
 | `GET` | `/v1/vaults/:vaultId/rekey?after=<n>&limit=<k>` | Current or previous token. → `{"rekeys": [{"rotation", "head", "at", "rekey"}], "more": bool}` for rotations greater than `n` (default 0), oldest first; `limit` default 8, max 32, page cut at ~4 MiB of bundles (`more` says to ask again with the last `rotation`). Bundles older than 30 days are gone. |
 | `DELETE` | `/v1/vaults/:vaultId` | Current token only. Wipes ops, snapshots, blobs and the vault record; frees the account slot. |
 
-A previous token may `GET` the vault, pull ops, fetch the snapshot and fetch rekey bundles; every
-other call gets `403 {"error": "token_read_only"}` (except `GET /kit`, which takes no vault token at
+A previous token may `GET` the vault and fetch rekey bundles; every
+other call (pull, snapshot, blob reads included) gets `403 {"error": "token_read_only"}` (except `GET /kit`, which takes no vault token at
 all: `401`). Thirty days after the rotation that retired it
 a previous token is unknown (`401 unauthorized`) and housekeeping deletes it and its bundle. Ops
 pushed with the current token after a rotation are accepted as usual; the server never parses ops.
@@ -343,9 +355,9 @@ existing blob; an ID can be used again after its blob was deleted (a new upload 
 | Method | Path | Notes |
 |---|---|---|
 | `PUT` | `/v1/vaults/:vaultId/blobs/:blobId` | Raw `application/octet-stream` body with `Content-Length` (`411 length_required`, `413 blob_too_large` over 104,883,275 bytes, `413 quota_exceeded` when the vault's blobs plus this one would pass its quota, `429 too_many_uploads` when two uploads of the vault are already running). Needs the current token and an entitled person (`403 token_read_only`, `402 payment_required`). → `201 {"created": true}`; an ID that already exists → `200 {"created": false}` without reading the body (safe retries). `507 server_full` when the data volume would have less than 1 GiB free after it, counting the uploads still in progress. The body streams to disk; a body that ends early is `400 incomplete_body`, a longer one `413 blob_too_large`. |
-| `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current or previous token, also in the read grace. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
-| `GET` | `/v1/vaults/:vaultId/blobs/:blobId` | The same access as `HEAD`. Raw bytes, `Content-Length`, `Moony-Blob-Size`; `404 blob_not_found` (also for a record whose file is gone). |
-| `GET` | `/v1/vaults/:vaultId/blobs` | The same access as `HEAD`. Query `after` (a blob ID, exclusive; `400 invalid_blob_id` when malformed) and `limit` (default 500, at most 1000; `400 invalid_limit` below 1). → `{"blobs": [{"id", "size", "createdAt"}], "more": bool, "now": <unix seconds>}` in ID order; `more` says another page follows. `now` is the server's clock, so a device can measure a blob's age (`now - createdAt`) on the same clock that stamped `createdAt`. |
+| `HEAD` | `/v1/vaults/:vaultId/blobs/:blobId` | Current token only (`403 token_read_only` for a previous one); a blocked person's current token is served until 30 days after `paidUntil`. `200` with `Content-Length` and `Moony-Blob-Size` and no body; `404 blob_not_found`. |
+| `GET` | `/v1/vaults/:vaultId/blobs/:blobId` | The same access as `HEAD` (current token only; a blocked person's current token is served until 30 days after `paidUntil`). Raw bytes, `Content-Length`, `Moony-Blob-Size`; `404 blob_not_found` (also for a record whose file is gone). |
+| `GET` | `/v1/vaults/:vaultId/blobs` | The same access as `HEAD` (current token only; a blocked person's current token is served until 30 days after `paidUntil`). Query `after` (a blob ID, exclusive; `400 invalid_blob_id` when malformed) and `limit` (default 500, at most 1000; `400 invalid_limit` below 1). → `{"blobs": [{"id", "size", "createdAt"}], "more": bool, "now": <unix seconds>}` in ID order; `more` says another page follows. `now` is the server's clock, so a device can measure a blob's age (`now - createdAt`) on the same clock that stamped `createdAt`. |
 | `DELETE` | `/v1/vaults/:vaultId/blobs/:blobId` | Current token only (`403 token_read_only` for a previous one), and also for a person who is blocked: deleting is never refused for payment. → `204`, whether or not the blob existed. Frees its quota. Used by the devices' daily clean-up and by nothing else. |
 
 Order of checks for `PUT`: token and entitlement come first, before a single body byte is read;
@@ -383,6 +395,19 @@ a restart the old values match nobody: they are cleared at start, those slots co
 global total only and are gone within about 11 minutes.
 The totals are kept in memory, updated by every put, read, burn and expiry, and recomputed from
 the table at start and in each minute sweep.
+
+## Compatibility
+
+Protocol 3 is the first published protocol; the apps that speak it are Moony from the first
+release with sync on. The rules for growing it:
+
+- A server ignores request fields it does not know.
+- An app ignores answer fields and features it does not know.
+- A change an older app would mishandle gets a new protocol number. A new error code on an
+  existing route counts as such a change, because an app keeps a code it does not know as "no
+  answer" and tries again.
+- An error code is never reused with another meaning.
+- An app that needs a newer protocol should refuse an older server.
 
 ## Sync flow (client view)
 
@@ -449,7 +474,7 @@ it. An upload that finishes after the vault is gone is refused and its file remo
 | Op ciphertext | 192 KiB |
 | Ops per push | 500 |
 | Push body | 4 MiB |
-| Pull page | default 500 ops, max 1000, cut at ~4 MiB |
+| Pull page | default 500 ops, max 1000, cut at ~4 MiB; the server reads the sizes first and the ciphertext of the returned ops only, so a request never loads more than the page it sends (same for the key-change page) |
 | Op bytes stored per vault | 256 MiB, each op charged ciphertext + 128 bytes |
 | Snapshot | 100 MiB, 2 kept per vault |
 | Blob | 104,883,275 bytes (100 MiB of content sealed by the app) |

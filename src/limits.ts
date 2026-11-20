@@ -1,4 +1,4 @@
-// Every tunable number of protocol v1 in one place. DESIGN.md mirrors this table.
+// Every tunable number of protocol 3 in one place. DESIGN.md mirrors this table.
 
 export const DAY = 24 * 60 * 60;
 

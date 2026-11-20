@@ -1,7 +1,7 @@
 // Token rotation.
 
 import { describe, expect, it } from "vitest";
-import { DAY } from "../src/limits.js";
+import { DAY, MAX_REKEY_PAGE_BYTES } from "../src/limits.js";
 import {
   auth,
   b64,
@@ -58,16 +58,15 @@ describe("token rotation", () => {
     expect((await push(t, fresh, ops("after", 1))).status).toBe(200);
     expect(await rotationOf(t, fresh)).toBe(1);
 
-    // The old token still reads: info, pull, snapshot, rekey bundles.
+    // The old token reads only the vault info and the key changes.
     const info = (await (await infoOf(t, v)).json()) as Info;
     expect(info).toMatchObject({ rotation: 1, head: 4 });
-    expect(((await (await pull(t, v)).json()) as PullBody).ops).toHaveLength(4);
-    const snap = await t.call("GET", `/v1/vaults/${v.id}/snapshot`, { headers: auth(v) });
-    expect(await snap.text()).toBe("snap-3");
     expect((await rekeys(t, v)).status).toBe(200);
 
-    // Anything else is refused.
+    // Anything else is refused, pull and snapshot included.
     const refused = [
+      await pull(t, v),
+      await t.call("GET", `/v1/vaults/${v.id}/snapshot`, { headers: auth(v) }),
       await push(t, v, ops("late", 1)),
       await uploadSnapshot(t, v, 4, "snap-4"),
       await rotate(t, v, newToken()),
@@ -77,7 +76,38 @@ describe("token rotation", () => {
       expect(r.status).toBe(403);
       expect(await r.json()).toEqual({ error: "token_read_only" });
     }
-    expect((await pull(t, fresh)).status).toBe(200);
+    // The new token does all of it.
+    expect(((await (await pull(t, fresh)).json()) as PullBody).ops).toHaveLength(4);
+    const snap = await t.call("GET", `/v1/vaults/${fresh.id}/snapshot`, { headers: auth(fresh) });
+    expect(await snap.text()).toBe("snap-3");
+    expect((await rekeys(t, fresh)).status).toBe(200);
+    expect((await infoOf(t, fresh)).status).toBe(200);
+  });
+
+  it("refuses a retired token on pull before looking at the floor", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    await push(t, v, ops("o", 4));
+    await uploadSnapshot(t, v, 3, "snap-3");
+    t.db.prepare("UPDATE ops SET created_at = ? WHERE vault_id = ?").run(t.clock.now - 40 * DAY, v.id);
+    t.stores.vaults.housekeep(v.id);
+    const next = newToken();
+    expect((await rotate(t, v, next)).status).toBe(200);
+
+    const retired = await pull(t, v, 0);
+    expect([retired.status, await retired.json()]).toEqual([403, { error: "token_read_only" }]);
+    expect((await pull(t, { ...v, token: next }, 0)).status).toBe(410);
+  });
+
+  it("keeps the read grace of a blocked person for the current token", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    await push(t, v, ops("g", 1));
+    t.stores.people.setState(t.stores.people.byAccount(v.account)!.id, "blocked");
+    t.clock.now += DAY;
+    expect((await pull(t, v)).status).toBe(200);
+    const write = await push(t, v, ops("h", 1));
+    expect([write.status, await write.json()]).toEqual([402, { error: "payment_required" }]);
   });
 
   it("stores the rekey bundle with its rotation number, head and time", async () => {
@@ -181,8 +211,8 @@ describe("token rotation", () => {
         "UPDATE prev_tokens SET rotated_at = ? WHERE rowid = (SELECT MIN(rowid) FROM prev_tokens WHERE vault_id = ?)",
       )
       .run(t.clock.now - 31 * DAY, v.id);
-    expect((await pull(t, v)).status).toBe(401);
-    expect((await pull(t, v1)).status).toBe(200);
+    expect((await rekeys(t, v)).status).toBe(401);
+    expect((await rekeys(t, v1)).status).toBe(200);
     expect(count(t, "prev_tokens", v.id)).toBe(2);
 
     t.stores.vaults.housekeep(v.id);
@@ -279,6 +309,26 @@ describe("token rotation", () => {
     expect(page.more).toBe(true);
   });
 
+  it("always returns at least one /rekey bundle, even one larger than the page cap", async () => {
+    const t = testApp();
+    let v = await newVault(t);
+    for (let i = 0; i < 2; i++) {
+      const next = newToken();
+      await rotate(t, v, next, rekeyOf(`b${i}`));
+      v = { ...v, token: next };
+    }
+    // The API caps a bundle at 256 KiB; plant one above the page cap to pin the "at least one" rule.
+    t.db
+      .prepare("UPDATE rekeys SET rekey = ? WHERE vault_id = ? AND rotation = 1")
+      .run(Buffer.alloc(MAX_REKEY_PAGE_BYTES + 1024, 1), v.id);
+    const page = (await (await rekeys(t, v)).json()) as Rekeys & { more: boolean };
+    expect(page.rekeys.map((r) => r.rotation)).toEqual([1]);
+    expect(page.more).toBe(true);
+    const rest = (await (await rekeys(t, v, 1)).json()) as Rekeys & { more: boolean };
+    expect(rest.rekeys.map((r) => r.rotation)).toEqual([2]);
+    expect(rest.more).toBe(false);
+  });
+
   it("lets a token retired long ago come back (no primary key collision)", async () => {
     const t = testApp();
     const v = await newVault(t);
@@ -315,5 +365,27 @@ describe("token rotation", () => {
         (t.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n,
       ).toBe(0);
     }
+  });
+});
+
+describe("a rekey page reads only what it sends", () => {
+  it("cuts the page by sizes before it reads any bundle", async () => {
+    const t = testApp();
+    let v = await newVault(t);
+    const size = 200 * 1024;
+    for (let i = 0; i < 32; i++) {
+      const next = newToken();
+      const res = await rotate(t, v, next, b64("y".repeat(size - 8) + String(i).padStart(8, "0")));
+      expect(res.status).toBe(200);
+      v = { ...v, token: next };
+    }
+    const fit = Math.floor(MAX_REKEY_PAGE_BYTES / size);
+    t.stores.vaults.stats.rekeyBytesRead = 0;
+    const res = await t.call("GET", `/v1/vaults/${v.id}/rekey?limit=32`, { headers: auth(v) });
+    const body = (await res.json()) as Rekeys & { more: boolean };
+    expect(body.rekeys.map((r) => r.rotation)).toEqual(Array.from({ length: fit }, (_, i) => i + 1));
+    expect(body.more).toBe(true);
+    expect(t.stores.vaults.stats.rekeyBytesRead).toBe(fit * size);
+    expect(t.stores.vaults.stats.rekeyBytesRead).toBeLessThanOrEqual(MAX_REKEY_PAGE_BYTES + size);
   });
 });

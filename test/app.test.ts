@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { afterAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { MIGRATIONS, openDb } from "../src/db.js";
-import { testApp } from "./helpers.js";
+import { setupAdmin, testApp } from "./helpers.js";
 
 describe("app shell", () => {
   it("GET /health", async () => {
@@ -22,7 +22,7 @@ describe("app shell", () => {
     expect(await res.json()).toEqual({
       name: "moony-sync",
       version: "9.9.9",
-      protocol: 2,
+      protocol: 3,
       mode: "self_hosted",
       features: ["blobs", "kit"],
     });
@@ -139,10 +139,10 @@ describe("openDb", () => {
     raw.prepare("INSERT INTO vaults (vault_id, account, token_hash, created_at, head) VALUES ('vault-a', '1234567890123456', 'h', 1, 3)").run();
     raw.prepare("INSERT INTO blobs (vault_id, blob_id, size, created_at) VALUES ('vault-a', 'b', 9, 1)").run();
     raw.close();
-    expect(MIGRATIONS).toHaveLength(8);
+    expect(MIGRATIONS).toHaveLength(9);
 
     const db = openDb(dir);
-    expect((db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number }).v).toBe(8);
+    expect((db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number }).v).toBe(9);
     expect(db.prepare("SELECT vault_id, head FROM vaults").all()).toEqual([{ vault_id: "vault-a", head: 3 }]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM blobs").get()).toEqual({ n: 1 });
     db.prepare("INSERT INTO kits (vault_id, token_hash, envelope, since, updated_at) VALUES ('vault-a', 'k', x'00', 2, 2)").run();
@@ -161,5 +161,34 @@ describe("openDb", () => {
     a.prepare("INSERT INTO schema_version (version) VALUES (?)").run(MIGRATIONS.length + 1);
     a.close();
     expect(() => openDb(dir)).toThrow("database_newer_than_server");
+  });
+});
+
+describe("proxy warning in the admin overview", () => {
+  const overview = async (s: Awaited<ReturnType<typeof setupAdmin>>) => (await s.call("GET", "overview")).json() as Promise<any>;
+
+  it("is null on a clean server, and /health does not count", async () => {
+    const t = testApp({ trustProxy: false });
+    const s = await setupAdmin(t);
+    await t.call("GET", "/health", { headers: { "x-forwarded-for": "203.0.113.5" } });
+    expect((await overview(s)).proxyWarning).toBeNull();
+    expect(t.logs.filter((l) => l.startsWith("proxy:"))).toEqual([]);
+  });
+
+  it("is forwarded_untrusted after a forwarded request with TRUST_PROXY off, logged once, without the address", async () => {
+    const t = testApp({ trustProxy: false });
+    const s = await setupAdmin(t);
+    await t.call("GET", "/v1/server", { headers: { "x-forwarded-for": "203.0.113.5" } });
+    await t.call("GET", "/v1/server", { headers: { "x-forwarded-for": "203.0.113.6" } });
+    expect((await overview(s)).proxyWarning).toBe("forwarded_untrusted");
+    expect(t.logs.filter((l) => l.startsWith("proxy:"))).toHaveLength(1);
+    expect(t.logs.join("\n")).not.toContain("203.0.113");
+  });
+
+  it("is direct_client when a request reaches the admin API without forwarding headers and TRUST_PROXY is on", async () => {
+    const t = testApp({ trustProxy: true });
+    expect(t.logs).toContain("TRUST_PROXY is on: only your reverse proxy may reach this port");
+    const s = await setupAdmin(t);
+    expect((await overview(s)).proxyWarning).toBe("direct_client");
   });
 });

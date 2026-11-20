@@ -1,5 +1,6 @@
 // Start-up that can be refused for a reason the operator must fix: a bad setting or a database
-// written by a newer server. Each prints one line and exits; nothing here prints a stack trace.
+// written by a newer server or holding vault IDs that differ only by letter case. Each prints one
+// line and exits; nothing here prints a stack trace.
 
 import { loadConfig, type Config } from "./config.js";
 import { openDb, type Db } from "./db.js";
@@ -17,6 +18,9 @@ export function startOrExit(env: NodeJS.ProcessEnv, fail: (line: string) => neve
   } catch (e) {
     if (e instanceof Error && e.message === "database_newer_than_server") {
       return fail("moony-sync: the database was written by a newer version of the server; update the server (do not delete the data)");
+    }
+    if (e instanceof Error && e.message === "vault_ids_collide_ignoring_case") {
+      return fail("moony-sync: two vault IDs in the database differ only by letter case; the server cannot start until one is removed (see \"If the server refuses to start\" in README.md; do not delete the data folder)");
     }
     throw e;
   }

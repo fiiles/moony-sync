@@ -30,6 +30,7 @@ export interface Overview {
   lastActivity: number | null;
   version: string;
   insecure: boolean;
+  proxyWarning: "forwarded_untrusted" | "direct_client" | null;
 }
 
 export interface Person {

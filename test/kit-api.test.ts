@@ -605,7 +605,7 @@ describe("the Kit in vault info, features and deletion", () => {
     const t = testApp();
     const body = (await (await t.call("GET", "/v1/server")).json()) as { features: string[]; protocol: number };
     expect(body.features).toEqual(["blobs", "kit"]);
-    expect(body.protocol).toBe(2);
+    expect(body.protocol).toBe(3);
   });
 
   it("deleting the vault removes its Kit and retired Kit hashes", async () => {

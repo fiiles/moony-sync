@@ -139,14 +139,17 @@ describe("upload and download", () => {
 });
 
 describe("access", () => {
-  it("a previous (rotated) token reads with GET and HEAD, and gets 403 token_read_only for PUT", async () => {
+  it("a previous (rotated) token gets 403 token_read_only for GET, HEAD and PUT", async () => {
     const t = testApp();
     const v = await newVault(t);
     const id = newBlobId();
     await uploadBlob(t, v, id, "content");
-    await rotate(t, v);
-    expect(await (await get(t, v, id)).text()).toBe("content");
-    expect((await get(t, v, id, "HEAD")).status).toBe(200);
+    const fresh = await rotate(t, v);
+    for (const method of ["GET", "HEAD"] as const) {
+      const res = await get(t, v, id, method);
+      expect([res.status, res.headers.get("moony-error")]).toEqual([403, "token_read_only"]);
+    }
+    expect(await (await get(t, fresh, id)).text()).toBe("content");
     const put = await uploadBlob(t, v, newBlobId(), "more");
     expect([put.status, await put.json()]).toEqual([403, { error: "token_read_only" }]);
     expect(put.headers.get("moony-error")).toBe("token_read_only");
@@ -458,7 +461,7 @@ describe("list", () => {
     expect([body.now, body.now - body.blobs[0]!.createdAt]).toEqual([1_900_000_623, 500]);
   });
 
-  it("an empty vault lists nothing; another vault's blobs are never listed; a previous token can list", async () => {
+  it("an empty vault lists nothing; another vault's blobs are never listed; a previous token cannot", async () => {
     const t = testApp();
     const v = await newVault(t);
     const other = await newVault(t);
@@ -467,8 +470,10 @@ describe("list", () => {
     await uploadBlob(t, other, id, "other");
     expect(await (await list(t, v)).json()).toEqual({ blobs: [], more: false, now: t.clock.now });
     await uploadBlob(t, v, id, "mine");
-    await rotate(t, v);
-    const res = await list(t, v);
+    const fresh = await rotate(t, v);
+    const old = await list(t, v);
+    expect([old.status, old.headers.get("moony-error")]).toEqual([403, "token_read_only"]);
+    const res = await list(t, fresh);
     expect(res.status).toBe(200);
     expect(((await res.json()) as { blobs: { id: string }[] }).blobs.map((b) => b.id)).toEqual([id]);
   });

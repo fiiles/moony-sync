@@ -132,6 +132,10 @@ export const MIGRATIONS: readonly string[] = [
   // envelope only while the vault is still at that count (a retried setup); rows from before
   // keep 0, which only a never-rotated vault matches.
   `ALTER TABLE kits ADD COLUMN stored_rotation INTEGER NOT NULL DEFAULT 0`,
+  // 9: vault IDs are unique ignoring letter case, so two vaults can never share one folder under
+  // blobs/ and snapshots/ on a file system that ignores case. Fails on a database that already
+  // holds two such IDs; openDb reports that as "vault_ids_collide_ignoring_case".
+  `CREATE UNIQUE INDEX vaults_id_fold ON vaults (lower(vault_id))`,
 ];
 
 /** Opens (creating it if needed) the database in `dataDir`, migrates it to the current
@@ -149,10 +153,17 @@ export function openDb(dataDir: string): Db {
     const current = row.v ?? 0;
     if (current > MIGRATIONS.length) throw new Error("database_newer_than_server");
     for (let v = current + 1; v <= MIGRATIONS.length; v++) {
-      db.transaction(() => {
-        db.exec(MIGRATIONS[v - 1]!);
-        db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(v);
-      })();
+      try {
+        db.transaction(() => {
+          db.exec(MIGRATIONS[v - 1]!);
+          db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(v);
+        })();
+      } catch (e) {
+        if (v === 9 && (e as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE") {
+          throw new Error("vault_ids_collide_ignoring_case");
+        }
+        throw e;
+      }
     }
   } catch (e) {
     db.close();

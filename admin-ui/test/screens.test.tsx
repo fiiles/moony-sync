@@ -108,6 +108,27 @@ describe("overview", () => {
     expect(mock.calls.find((c) => c.method === "PUT")?.body).toEqual({ publicUrl: "http://localhost:8791" });
   });
 
+  it("shows no proxy banner when the server reports none", async () => {
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET overview": () => ({ json: overviewBody() }) });
+    openApp("/");
+    await screen.findByText("41 MB");
+    expect(screen.queryByText(/TRUST_PROXY/)).toBeNull();
+  });
+
+  it("warns when a proxy is not declared", async () => {
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET overview": () => ({ json: overviewBody({ proxyWarning: "forwarded_untrusted" }) }) });
+    openApp("/");
+    await screen.findByText(/behind a proxy, but TRUST_PROXY is off/);
+    expect(screen.getByText(/Set TRUST_PROXY=1 if exactly one reverse proxy/)).toBeTruthy();
+  });
+
+  it("warns when the port can be reached around the proxy", async () => {
+    installMock({ "GET state": () => ({ json: loggedIn }), "GET overview": () => ({ json: overviewBody({ proxyWarning: "direct_client" }) }) });
+    openApp("/");
+    await screen.findByText(/without passing the proxy/);
+    expect(screen.getByText(/127\.0\.0\.1:8787:8787/)).toBeTruthy();
+  });
+
   it("shows the four figures, the last sync with its absolute time in a title", async () => {
     installMock({ "GET state": () => ({ json: loggedIn }), "GET overview": () => ({ json: overviewBody() }) });
     openApp("/");

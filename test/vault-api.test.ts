@@ -1,12 +1,13 @@
 // Vault creation, ops, entitlement and snapshots.
 
 import { describe, expect, it } from "vitest";
-import { DAY, MAX_OP_BYTES, MAX_OPS_PER_PUSH, MAX_VAULT_OP_BYTES, OP_OVERHEAD_BYTES } from "../src/limits.js";
+import { DAY, MAX_OP_BYTES, MAX_PULL_BYTES, MAX_OPS_PER_PUSH, MAX_VAULT_OP_BYTES, OP_OVERHEAD_BYTES } from "../src/limits.js";
 import {
   addPerson,
   auth,
   b64,
   newToken,
+  newBlobId,
   newVault,
   newVaultId,
   pull,
@@ -14,6 +15,7 @@ import {
   snapshotFiles,
   testApp,
   unb64,
+  uploadBlob,
   uploadSnapshot,
   type PullBody,
   type TestApp,
@@ -63,6 +65,52 @@ describe("vault creation", () => {
       headers: { authorization: `Bearer ${newToken()}`, "moony-account": v.account },
     });
     expect(other.status).toBe(409);
+  });
+
+  it("refuses a vault ID that differs from an existing one only by letter case", async () => {
+    const t = testApp();
+    const account = addPerson(t).account;
+    const v: Vault = { account, id: "AbCdEfGhIjKlMnOpQrStUv", token: newToken() };
+    const created = await t.call("PUT", `/v1/vaults/${v.id}`, {
+      headers: { authorization: `Bearer ${v.token}`, "moony-account": account },
+    });
+    expect(created.status).toBe(201);
+    expect((await uploadSnapshot(t, v, 0, "snapshot-one")).status).toBe(201);
+    const blobId = newBlobId();
+    expect((await uploadBlob(t, v, blobId, "blob-one")).status).toBe(201);
+
+    for (const id of [v.id.toLowerCase(), v.id.toUpperCase()]) {
+      const res = await t.call("PUT", `/v1/vaults/${id}`, {
+        headers: { authorization: `Bearer ${newToken()}`, "moony-account": account },
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: "vault_exists" });
+    }
+    // The same token with a differently cased ID is refused too (the folded check comes first).
+    const sameToken = await t.call("PUT", `/v1/vaults/${v.id.toLowerCase()}`, {
+      headers: { authorization: `Bearer ${v.token}`, "moony-account": account },
+    });
+    expect(sameToken.status).toBe(409);
+    expect(await sameToken.json()).toEqual({ error: "vault_exists" });
+    expect(t.db.prepare("SELECT COUNT(*) AS n FROM vaults").get()).toEqual({ n: 1 });
+
+    const snap = await t.call("GET", `/v1/vaults/${v.id}/snapshot`, { headers: auth(v) });
+    expect(snap.status).toBe(200);
+    expect(await snap.text()).toBe("snapshot-one");
+    const blob = await t.call("GET", `/v1/vaults/${v.id}/blobs/${blobId}`, { headers: auth(v) });
+    expect(blob.status).toBe(200);
+    expect(await blob.text()).toBe("blob-one");
+  });
+
+  it("treats a pending deletion ignoring case", async () => {
+    const t = testApp();
+    const account = addPerson(t).account;
+    t.db.prepare("INSERT INTO pending_wipes (vault_id) VALUES (?)").run("AbCdEfGhIjKlMnOpQrStUv");
+    const res = await t.call("PUT", `/v1/vaults/abcdefghijklmnopqrstuv`, {
+      headers: { authorization: `Bearer ${newToken()}`, "moony-account": account },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "vault_deleting" });
   });
 
   it("caps vaults per account", async () => {
@@ -301,5 +349,69 @@ describe("snapshots", () => {
     expect(huge.status).toBe(413);
     expect(await huge.json()).toEqual({ error: "snapshot_too_large" });
     expect(snapshotFiles(t, v)).toEqual([]);
+  });
+});
+
+describe("a pull reads only what it sends", () => {
+  it("cuts the page by sizes before it reads any ciphertext", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const ct = 150 * 1024;
+    const body = (i: number) => ({ id: `big-${i}`, ct: b64("x".repeat(ct - 8) + String(i).padStart(8, "0")) });
+    for (let batch = 0; batch < 6; batch++) {
+      const res = await push(t, v, Array.from({ length: 10 }, (_, i) => body(batch * 10 + i)));
+      expect(res.status).toBe(200);
+    }
+    const perOp = ct + OP_OVERHEAD_BYTES;
+    const fit = Math.floor(MAX_PULL_BYTES / perOp);
+    t.stores.vaults.stats.opBytesRead = 0;
+    const res = await pull(t, v, 0, 1000);
+    const page = (await res.json()) as PullBody;
+    expect(page.ops.map((o) => o.seq)).toEqual(Array.from({ length: fit }, (_, i) => i + 1));
+    expect(page.ops.map((o) => o.id)).toEqual(Array.from({ length: fit }, (_, i) => `big-${i}`));
+    expect(page.head).toBe(60);
+    expect(page.more).toBe(true);
+    // The ciphertext that comes back is exactly what was pushed.
+    expect(page.ops[0]!.ct).toBe(body(0).ct);
+    expect(page.ops[fit - 1]!.ct).toBe(body(fit - 1).ct);
+    expect(t.stores.vaults.stats.opBytesRead).toBe(fit * ct);
+    expect(t.stores.vaults.stats.opBytesRead).toBeLessThanOrEqual(MAX_PULL_BYTES + ct);
+  });
+
+  it("returns a single op whose charge exceeds the page budget alone, and the next page continues after it", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const res = await push(t, v, Array.from({ length: 3 }, (_, i) => ({ id: `o-${i}`, ct: b64(`op-${i}`) })));
+    expect(res.status).toBe(200);
+    // The API caps an op at 192 KiB, so plant one oversized row directly.
+    const huge = Buffer.alloc(MAX_PULL_BYTES + 10, 7);
+    t.db
+      .prepare("UPDATE ops SET ct = ?, size = ? WHERE vault_id = ? AND seq = 2")
+      .run(huge, huge.byteLength + OP_OVERHEAD_BYTES, v.id);
+
+    const first = (await (await pull(t, v, 0, 1000)).json()) as PullBody;
+    expect(first.ops.map((o) => o.seq)).toEqual([1]);
+    expect(first.more).toBe(true);
+    const page = (await (await pull(t, v, 1, 1000)).json()) as PullBody;
+    expect(page.ops.map((o) => o.seq)).toEqual([2]);
+    expect(page.ops[0]!.ct).toBe(huge.toString("base64"));
+    expect(page.more).toBe(true);
+    const rest = (await (await pull(t, v, 2, 1000)).json()) as PullBody;
+    expect(rest.ops.map((o) => o.seq)).toEqual([3]);
+    expect(rest.ops[0]!.ct).toBe(b64("op-2"));
+    expect(rest.more).toBe(false);
+  });
+
+  it("cuts a page at limit and says there is more", async () => {
+    const t = testApp();
+    const v = await newVault(t);
+    const res = await push(t, v, Array.from({ length: 5 }, (_, i) => ({ id: `s-${i}`, ct: b64(`op-${i}`) })));
+    expect(res.status).toBe(200);
+    const page = (await (await pull(t, v, 0, 3)).json()) as PullBody;
+    expect(page.ops.map((o) => o.seq)).toEqual([1, 2, 3]);
+    expect(page.more).toBe(true);
+    const rest = (await (await pull(t, v, 3, 3)).json()) as PullBody;
+    expect(rest.ops.map((o) => o.seq)).toEqual([4, 5]);
+    expect(rest.more).toBe(false);
   });
 });
