@@ -1,4 +1,4 @@
-# Moony sync server — design (protocol v1.1)
+# Moony sync server — design (protocol 3)
 
 The sync server keeps Moony devices in sync. It **stores and forwards ciphertext it cannot read**.
 Every Moony device keeps its own encrypted database; devices exchange encrypted change records
@@ -8,9 +8,9 @@ You run it yourself (see `README.md`). It is one Node process with one data fold
 for the person who runs it, and the sync API the Moony apps talk to. User-facing wording is "sync
 server"; "relay" is an internal name that survives in some code.
 
-`GET /v1/server` answers `protocol: 3`: the sync API of v1.1 below, plus the server-address
-discovery and the changes in "Changes to the v1.1 API". An app that needs that protocol refuses an
-older server.
+This document describes **protocol 3**, the first published protocol. `GET /v1/server` answers
+`protocol: 3`, and an app that needs it refuses an older server. How the protocol may change is
+under *Compatibility*.
 
 ## Principles
 
@@ -275,19 +275,6 @@ numbers and the second-factor secret in clear: keep it private. Restore is manua
 server, replace the contents of `DATA_DIR`, start. Restoring an older archive makes every device
 report that the sync server went back.
 
-## Changes to the v1.1 API
-
-The sync API is the v1.1 API (below) with these differences:
-
-| Change | Detail |
-|---|---|
-| `GET /v1/server` | No auth. → `{"name": "moony-sync", "version": "<semver>", "protocol": 3, "mode": "self_hosted", "features": ["blobs", "kit"]}`. The app uses it to confirm an address is a Moony sync server. `features` lists optional capabilities (`blobs`: the blob endpoints; `kit`: the Recovery Kit endpoints and the `kit` of a rotation); the protocol stays 3, and a server without the field has no features. Rate-limited like account lookups. |
-| `POST /v1/accounts` | `403 registration_closed`. |
-| `POST /v1/accounts/me/checkout` | `409 self_hosted` (so older app builds keep working); `400 missing_account` without the header. |
-| `DELETE /v1/accounts/me` | `403 managed_by_operator`: the admin owns the person record. |
-| Webhooks | There are none; the paths answer `404 not_found`. |
-| Rate-limit key | The socket address, or the last `X-Forwarded-For` entry with `TRUST_PROXY=1`. |
-
 ## HTTP API
 
 All bodies are JSON unless noted. Errors are `{"error": "<code>"}` with a matching status.
@@ -298,11 +285,14 @@ Headers: `Moony-Account: <account number>` for account calls and vault creation;
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/v1/server` | See above. |
+| `GET` | `/v1/server` | No auth. → `{"name": "moony-sync", "version": "<semver>", "protocol": 3, "mode": "self_hosted", "features": ["blobs", "kit"]}`. The app uses it to confirm an address is a Moony sync server. `features` lists the optional capabilities: `blobs` (the blob endpoints) and `kit` (the Recovery Kit endpoints and the `kit` of a rotation). Both are part of protocol 3 and every protocol-3 server lists both; the list exists so that a later protocol can add features. Rate-limited like account lookups. |
 | `POST` | `/v1/accounts` | `403 registration_closed`. Rate-limited per client. |
 | `GET` | `/v1/accounts/me` | → `{"paidUntil": <unix s or null>, "active": bool, "vaults": n}`; `404 account_not_found`. `paidUntil` is the far-future constant for an active person, the time of the block for a blocked one. |
-| `POST` | `/v1/accounts/me/checkout` | `409 self_hosted` |
-| `DELETE` | `/v1/accounts/me` | `403 managed_by_operator` |
+| `POST` | `/v1/accounts/me/checkout` | `409 self_hosted`; `400 missing_account` without the header. |
+| `DELETE` | `/v1/accounts/me` | `403 managed_by_operator`: the admin owns the person record. |
+
+There are no webhooks; those paths answer `404 not_found`. The rate-limit key is the socket
+address, or the last `X-Forwarded-For` entry with `TRUST_PROXY=1`.
 
 ### Vaults
 
@@ -405,6 +395,20 @@ a restart the old values match nobody: they are cleared at start, those slots co
 global total only and are gone within about 11 minutes.
 The totals are kept in memory, updated by every put, read, burn and expiry, and recomputed from
 the table at start and in each minute sweep.
+
+## Compatibility
+
+Protocol 3 is the first published protocol; the apps that speak it are Moony from the first
+release with sync on. The rules for growing it:
+
+- A server ignores request fields it does not know.
+- An app ignores answer fields and features it does not know.
+- A change an older app would mishandle gets a new protocol number. A new error code on an
+  existing route counts as such a change: an app keeps a code it does not know as "no answer" and
+  tries again.
+- An error code is never reused with another meaning.
+- An app that needs a newer protocol refuses an older server, at setup and when a server address
+  is entered.
 
 ## Sync flow (client view)
 

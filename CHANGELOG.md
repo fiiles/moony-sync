@@ -12,7 +12,9 @@ All notable changes to the Moony sync server are documented in this file. The fo
   folder, run from a Docker image you build yourself.
 - **Sync API, protocol 3.** Encrypted change records and snapshots per profile, token rotation
   with rekey bundles, pairing mailboxes for adding a device, encrypted documents and photos with
-  a quota per profile, and the Recovery Kit. After a device is removed, the old token can read
+  a quota per profile, and the Recovery Kit. `GET /v1/server` answers `protocol: 3` and lists the
+  features `blobs` and `kit`; `DESIGN.md` has a Compatibility section with the rules for how the
+  protocol may change. After a device is removed, the old token can read
   only the profile's info and the key changes for 30 days; everything else needs the new token.
 - **Web admin** in Czech and English: add, block and delete people, show a person's connection
   code, see the space used, change settings and download a backup. Login with a password and an
