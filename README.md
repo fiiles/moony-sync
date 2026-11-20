@@ -242,6 +242,23 @@ does not touch the admin, sessions or data); `reset-admin` clears them too. A pa
 admin who is already signed in (change password, second factor, connection code) is counted
 against that client address only, so strangers' failed logins never refuse it.
 
+## If the server refuses to start
+
+Two vault IDs in the database that differ only by letter case (a database from before IDs were
+unique ignoring case) stop the server with one line. Stop the container, back up the data folder,
+then open the database with `sqlite3 <data folder>/moony-sync.db` and run:
+
+```sql
+SELECT vault_id FROM vaults WHERE lower(vault_id) IN
+  (SELECT lower(vault_id) FROM vaults GROUP BY 1 HAVING COUNT(*) > 1);
+PRAGMA foreign_keys=ON;
+DELETE FROM vaults WHERE vault_id = '<the spelling to remove>';
+```
+
+`PRAGMA foreign_keys=ON` must come first: the `sqlite3` tool starts with it off, and without it the
+vault's ops, key changes and snapshot and blob records stay behind. Its snapshot and blob files are
+removed by the server's next clean-up. Then start the server.
+
 ## Settings (environment variables)
 
 All optional. Everything else is set on the admin page and stored in the database.

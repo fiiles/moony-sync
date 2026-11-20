@@ -404,11 +404,10 @@ release with sync on. The rules for growing it:
 - A server ignores request fields it does not know.
 - An app ignores answer fields and features it does not know.
 - A change an older app would mishandle gets a new protocol number. A new error code on an
-  existing route counts as such a change: an app keeps a code it does not know as "no answer" and
-  tries again.
+  existing route counts as such a change, because an app keeps a code it does not know as "no
+  answer" and tries again.
 - An error code is never reused with another meaning.
-- An app that needs a newer protocol refuses an older server, at setup and when a server address
-  is entered.
+- An app that needs a newer protocol should refuse an older server.
 
 ## Sync flow (client view)
 
