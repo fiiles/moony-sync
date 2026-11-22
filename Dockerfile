@@ -4,7 +4,7 @@
 # are installed inside the build stage for the libc the runtime stage runs on. Nothing is ever
 # copied in from the host's node_modules.
 
-FROM node:24-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 # Build tools for better-sqlite3, in case no prebuilt binary matches.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \
@@ -18,7 +18,7 @@ COPY admin-ui ./admin-ui
 RUN npm run build \
  && npm prune --omit=dev
 
-FROM node:24-bookworm-slim
+FROM node:26-bookworm-slim
 ENV NODE_ENV=production \
     DATA_DIR=/data
 WORKDIR /app
