@@ -310,7 +310,8 @@ that runs every minute); after that only a content-free tombstone remains. Limit
 or IPv6 /64, at most 8 MiB of that), and request bodies being buffered at one moment (sync and
 admin API together; snapshot uploads stream to disk and do not count) share 64 MiB (one client
 address, or IPv6 /64, at most 8 MiB of it), reserved as the bytes arrive. A body that delivers
-nothing for 30 seconds is aborted with `408 {"error":"body_timeout"}`. With `TRUST_PROXY=1` the
+nothing for 30 seconds is aborted with `408 {"error":"body_timeout"}`; this includes snapshot
+and document uploads. With `TRUST_PROXY=1` the
 **last** `X-Forwarded-For` entry is the client address.
 
 ## Known limits

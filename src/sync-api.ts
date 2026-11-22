@@ -20,6 +20,7 @@ import { errorResponse, fromResult, json, readBody, readJson, type BodyBudget } 
 import {
   DEFAULT_PULL_LIMIT,
   DEFAULT_REKEY_LIMIT,
+  IDLE_BODY_SECONDS,
   MAX_OP_BYTES,
   MAX_MAILBOX_SLOT_BYTES,
   MAX_OPS_PER_PUSH,
@@ -31,7 +32,7 @@ import {
 } from "./limits.js";
 import { clientKey, tokenKey, type Limiters } from "./ratelimit.js";
 import { parseEnvelope } from "./kits.js";
-import { SnapshotBodyError } from "./snapshots.js";
+import { SnapshotBodyError, SnapshotIdleError } from "./snapshots.js";
 import type { IncomingOp, KitUpdate } from "./vaults.js";
 
 type Env = { Bindings: AppBindings };
@@ -230,9 +231,10 @@ async function vaultRoute(request: Request, rd: RouteDeps, caller: string): Prom
         // The declared length is also the cap: a body that runs past it is refused as it streams.
         let written;
         try {
-          written = await snapshots.write(vaultId, seq, request.body, length);
+          written = await snapshots.write(vaultId, seq, request.body, length, IDLE_BODY_SECONDS * 1000);
         } catch (e) {
           if (e instanceof SnapshotBodyError) return errorResponse(400, "incomplete_body");
+          if (e instanceof SnapshotIdleError) return errorResponse(408, "body_timeout");
           // The vault was deleted while the body was streaming: its directory is gone.
           if ((e as NodeJS.ErrnoException).code === "ENOENT") return errorResponse(404, "vault_not_found");
           throw e; // disk errors: 500 internal_error via the app's error handler

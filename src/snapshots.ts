@@ -14,16 +14,18 @@ import { join } from "node:path";
 import { isVaultId } from "./encoding.js";
 import { listVaultDirs, openRead, syncDir, writeNewFile } from "./files.js";
 
-export { BodyStreamError as SnapshotBodyError } from "./files.js";
+export { BodyIdleError as SnapshotIdleError, BodyStreamError as SnapshotBodyError } from "./files.js";
 
 export interface Snapshots {
   /** Streams `body` to a new file of the vault. "too_large" when it passes `maxBytes` (nothing
-   *  is left behind); a body that errors out throws, also leaving nothing behind. */
+   *  is left behind); a body that errors out (BodyStreamError) or delivers nothing for `idleMs`
+   *  (BodyIdleError) throws, also leaving nothing behind. */
   write(
     vaultId: string,
     seq: number,
     body: ReadableStream<Uint8Array>,
     maxBytes: number,
+    idleMs?: number,
   ): Promise<{ file: string; size: number } | "too_large">;
   /** null when the vault ID or file name is malformed or the file does not exist. */
   open(vaultId: string, file: string): { stream: ReadableStream<Uint8Array>; size: number } | null;
@@ -54,13 +56,13 @@ export function createSnapshots(root: string): Snapshots {
   }
 
   return {
-    async write(vaultId, seq, body, maxBytes) {
+    async write(vaultId, seq, body, maxBytes, idleMs) {
       if (!isVaultId(vaultId)) throw new Error("invalid_vault_id");
       const dir = dirOf(vaultId);
       mkdirSync(dir, { recursive: true });
       const file = `${seq}-${randomUUID()}`;
       const tmp = join(dir, file + TMP_SUFFIX);
-      const size = await writeNewFile(tmp, body, maxBytes);
+      const size = await writeNewFile(tmp, body, maxBytes, idleMs);
       if (size === "too_large") return "too_large";
       try {
         renameSync(tmp, join(dir, file));
