@@ -359,7 +359,7 @@ npm run dev:ui      # Vite dev server for the admin interface
 src/              the server: sync API (sync-api.ts), vaults, mailboxes, people, admin/
 admin-ui/         the admin web interface (Preact, built with Vite, served by the server)
 test/             server tests, each on a temporary data directory and a clock the test moves
-Dockerfile        multi-stage build on node:24-bookworm-slim
+Dockerfile        multi-stage build on node:26-bookworm-slim
 compose.yml       the service as described above
 DESIGN.md         protocol, storage, admin, what the server knows
 ```

@@ -11,7 +11,7 @@ commits on `main`. There is no formal review queue; quality rests on tests and o
 below.
 
 - **Gates**: `npm run typecheck`, `npm test` and `npm run build`. CI runs them on every push and
-  pull request, on Node 22 and 24, together with `npm audit` for the production dependencies and
+  pull request, on Node 22, 24 and 26, together with `npm audit` for the production dependencies and
   a build of the Docker image.
 - **Tests first** for a bug fix: a test that fails without the fix. Server tests call the server
   in-process on a temporary data directory, with a clock the test moves by hand

@@ -6,6 +6,12 @@ All notable changes to the Moony sync server are documented in this file. The fo
 
 ## [Unreleased]
 
+### Changed
+
+- The Docker image runs on Node 26 (LTS) instead of Node 24. Running without Docker still needs
+  Node 22 or newer.
+- Dependency updates: hono 4.13.19, @hono/node-server 2.1.9, better-sqlite3 13.2.0.
+
 ## [1.0.0] - 2026-11-22
 
 The first public version. It works with Moony 1.4.1 and newer.
