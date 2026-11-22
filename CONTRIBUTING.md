@@ -100,7 +100,7 @@ Keep commits small and focused: one logical change per commit.
 
 Use the **Bug report** form when you open an issue. It asks for:
 
-1. **The version**: the commit you built from (`git rev-parse --short HEAD`)
+1. **The version**: the release you run, or the commit you built from (`git rev-parse --short HEAD`)
 2. **How you run it**: Docker with `compose.yml` or Node, and the reverse proxy in front
 3. **Steps to reproduce**, the expected and the actual behaviour, with the exact error text
 4. **The server log**: the relevant lines of `docker compose logs moony-sync`

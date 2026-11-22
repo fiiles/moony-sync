@@ -400,8 +400,8 @@ the table at start and in each minute sweep.
 
 ## Compatibility
 
-Protocol 3 is the first published protocol; the apps that speak it are Moony from the first
-release with sync on. The rules for growing it:
+Protocol 3 is the first published protocol; the apps that speak it are Moony 1.4.1 and newer,
+the first release with sync on. The rules for growing it:
 
 - A server ignores request fields it does not know.
 - An app ignores answer fields and features it does not know.

@@ -7,9 +7,9 @@ are best-effort commitments, not a service level.
 ## Supported versions
 
 Releases are numbered and tagged ([CHANGELOG.md](CHANGELOG.md)), but no image is published: you
-build the server from this repository. Only the **latest commit on `main`** receives security
-fixes; older releases get no backports. If you run an older build, update first (`git pull`,
-`docker compose up -d --build`) and check whether the problem still exists.
+build the server from this repository. Only the **latest release** receives security fixes; a fix
+ships as a new release, and older releases get no backports. If you run an older release, update
+first (README, "Update") and check whether the problem still exists.
 
 ## Reporting a vulnerability
 
@@ -23,7 +23,7 @@ the maintainer will arrange a private channel.
 
 A useful report contains:
 
-- what is affected (the commit you built from, how you run the server, the reverse proxy) and
+- what is affected (the release or commit you built from, how you run the server, the reverse proxy) and
   what an attacker gains;
 - steps to reproduce, or a proof of concept (an HTTP request, a crafted backup archive …);
 - whether you have shared the details with anyone else.
@@ -38,7 +38,7 @@ account number, token or backup archive.
 | Acknowledgement of your report | within 7 days |
 | First assessment (confirmed, needs more information, or not a vulnerability) | within 14 days |
 | Fix or mitigation for a confirmed issue | within 90 days, usually much sooner |
-| Public disclosure | after a fix is on `main`, or after 90 days, whichever comes first; earlier or later by agreement with you |
+| Public disclosure | after a fix is released, or after 90 days, whichever comes first; earlier or later by agreement with you |
 
 Confirmed vulnerabilities are published as a GitHub security advisory and noted under
 *Security* in [CHANGELOG.md](CHANGELOG.md). You are credited by name or handle unless you prefer

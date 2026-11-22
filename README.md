@@ -20,16 +20,20 @@ It cannot read them: the keys never leave your devices.
 
 The screenshots show made-up people and random data.
 
+**Requirements:** Moony 1.4.1 or newer on every device (sync protocol 3), and Docker with the
+compose plugin, or Node 22 or newer.
+
 How the protocol works, what the server stores and what it can see: [`DESIGN.md`](DESIGN.md).
 
 ## Run it
 
 You need Docker with the compose plugin. This repository does not publish an image; you build it
-once from the source:
+once from the source of the latest release:
 
 ```bash
 git clone https://github.com/fiiles/moony-sync.git
 cd moony-sync
+git checkout v1.0.0                    # the latest release, see CHANGELOG.md
 mkdir -m 700 data && sudo chown 1000:1000 data   # the container runs as user "node" (uid 1000)
 docker compose up -d --build
 docker compose logs moony-sync         # shows the one-time setup code
@@ -214,12 +218,16 @@ backup schedule.
 
 ## Update
 
-You build the image yourself, so an update is:
+You build the image yourself, so an update is: read [CHANGELOG.md](CHANGELOG.md), take a
+backup, then check out the new release tag and rebuild:
 
 ```bash
-git pull
+git fetch --tags
+git checkout v1.0.1                    # the new release
 docker compose up -d --build
 ```
+
+`main` may hold changes that are not released yet; run a tagged release.
 
 The server migrates its database at start with append-only numbered migrations. It refuses to
 start on a database written by a newer version, so going back to an older version needs a
@@ -256,8 +264,9 @@ from anyone lock the login for 15 minutes for everybody; `unlock-admin` clears t
 
 ## If the server refuses to start
 
-Two vault IDs in the database that differ only by letter case (a database from before IDs were
-unique ignoring case) stop the server with one line. Stop the container, back up the data folder,
+Only a database written by a build from before 1.0.0 can hit this. Two vault IDs in the database
+that differ only by letter case (from before IDs were unique ignoring case) stop the server with
+one line. Stop the container, back up the data folder,
 then open the database with `sqlite3 <data folder>/moony-sync.db` and run:
 
 ```sql
