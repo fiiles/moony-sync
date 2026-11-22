@@ -56,6 +56,9 @@ and prints one line without the IDs.
   pairing mailboxes and their slots, the admin,
   admin sessions, backup codes and settings. Deleting a vault row cascades to everything the vault
   owns. Timestamps are unix seconds.
+- Only the server's user can read the data: the database (and so its `-wal` and `-shm` files) and
+  the temporary database copy of a backup are mode 0600, the database is set back to 0600 at
+  every start, a data folder the server creates is 0700, and snapshot and blob files are 0600.
 - Schema changes are numbered, append-only migrations run at start. A server never starts on a
   database newer than it knows (`database_newer_than_server`).
 - A snapshot upload streams to `<name>.tmp` in the vault's directory, is fsynced, then renamed,

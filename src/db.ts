@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 
 export type Db = Database.Database;
 
@@ -138,11 +138,25 @@ export const MIGRATIONS: readonly string[] = [
   `CREATE UNIQUE INDEX vaults_id_fold ON vaults (lower(vault_id))`,
 ];
 
+/** Creates `file` as 0600 when it is missing, and makes an existing one 0600. The database holds
+ *  the admin's second-factor secret in clear; SQLite gives its -wal and -shm files the database
+ *  file's mode. A file the server's user does not own keeps its mode (best effort). */
+export function restrictToOwner(file: string): void {
+  closeSync(openSync(file, "a", 0o600));
+  try {
+    chmodSync(file, 0o600);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EPERM") throw e;
+  }
+}
+
 /** Opens (creating it if needed) the database in `dataDir`, migrates it to the current
  *  schema, and refuses one written by a newer server. */
 export function openDb(dataDir: string): Db {
-  mkdirSync(dataDir, { recursive: true });
-  const db = new Database(`${dataDir}/moony-sync.db`);
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const file = `${dataDir}/moony-sync.db`;
+  restrictToOwner(file);
+  const db = new Database(file);
   try {
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");

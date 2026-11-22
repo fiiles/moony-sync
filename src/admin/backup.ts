@@ -8,7 +8,7 @@ import { open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { BlobFiles } from "../blob-files.js";
-import type { Db } from "../db.js";
+import { restrictToOwner, type Db } from "../db.js";
 import type { Snapshots } from "../snapshots.js";
 
 const BLOCK = 512;
@@ -93,6 +93,7 @@ export async function createBackupStream(opts: {
 }): Promise<ReadableStream<Uint8Array>> {
   const tmp = join(opts.dataDir, `.backup-${randomUUID()}.tmp`);
   try {
+    restrictToOwner(tmp); // the copy holds what the database holds; SQLite keeps the mode
     await opts.db.backup(tmp);
     // Listed after the copy: every snapshot the copied database refers to still exists, unless
     // housekeeping removed it in the meantime.

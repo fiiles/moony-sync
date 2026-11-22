@@ -30,7 +30,7 @@ once from the source:
 ```bash
 git clone https://github.com/fiiles/moony-sync.git
 cd moony-sync
-mkdir data && chown 1000:1000 data     # the container runs as user "node" (uid 1000)
+mkdir -m 700 data && sudo chown 1000:1000 data   # the container runs as user "node" (uid 1000)
 docker compose up -d --build
 docker compose logs moony-sync         # shows the one-time setup code
 ```
@@ -40,7 +40,8 @@ docker compose logs moony-sync         # shows the one-time setup code
 `GET /health`.
 
 The `chown` matters with a bind mount: Docker creates a missing `./data` as root, and the server
-could not write to it. If you prefer a named volume, replace `./data:/data` with a volume name.
+could not write to it. `-m 700` keeps other users of the machine out of the folder; the server
+itself makes its database readable by its own user only. If you prefer a named volume, replace `./data:/data` with a volume name.
 
 Without Docker (Node 22 or newer):
 
